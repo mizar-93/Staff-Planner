@@ -422,6 +422,7 @@ input:focus,
 
 html {
   background: var(--bg);
+  scroll-behavior: smooth;
 }
 
 body {
@@ -437,12 +438,52 @@ body {
   top: 0;
   width: 260px;
   height: 100vh;
+  height: 100dvh;
   padding: 28px 18px 20px;
   border: 0;
   background:
     radial-gradient(circle at 20% 0%, rgba(72, 122, 255, 0.23), transparent 30%),
     var(--sidebar-bg);
   box-shadow: 8px 0 35px rgba(11, 23, 48, 0.1);
+}
+
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 10000;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+  color: var(--primary-hover);
+  font-weight: 800;
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform .18s ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 3px solid rgba(53, 109, 243, .42);
+  outline-offset: 2px;
+}
+
+.sidebar :where(a, button):focus-visible {
+  outline-color: rgba(140, 171, 255, .8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
 
 .logo {
@@ -620,6 +661,45 @@ body {
   .todo-form .btn { width: 100%; }
   .todo-item { align-items: flex-start; flex-wrap: wrap; }
   .todo-item small { width: calc(100% - 34px); margin-left: 34px; }
+}
+
+/* Keep the logout action inside the sidebar when the navigation grows. */
+@media (min-width: 901px) {
+  .sidebar {
+    overflow: hidden;
+  }
+
+  .sidebar .nav {
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 3px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, .2) transparent;
+  }
+
+  .sidebar-logout {
+    flex: 0 0 auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .sidebar .nav {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .sidebar.nav-open .sidebar-logout {
+    width: 100%;
+    grid-column: 1 / -1;
+    margin-top: 4px;
+  }
 }
 
 .nav-link:hover {
@@ -951,7 +1031,9 @@ input:focus {
 #appShell > footer {
   margin: -40px 0 0 260px !important;
   padding: 20px 40px 28px;
+  color: #8794aa;
   font-size: 12px;
+  text-align: center;
 }
 
 @media (max-width: 900px) {

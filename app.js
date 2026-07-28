@@ -1344,16 +1344,37 @@ function setupTodoPage() {
   });
 }
 
-function ensureTodoNavigation() {
-  document.querySelectorAll(".nav").forEach(nav => {
-    if (nav.querySelector('[href="todo.html"]')) return;
-    const link = document.createElement("a");
-    link.className = "nav-link";
-    link.href = "todo.html";
-    link.textContent = "Att göra";
-    const addLink = nav.querySelector('[href="add.html"]');
-    nav.insertBefore(link, addLink || null);
+function enhanceAppShell() {
+  const main = document.querySelector(".main");
+  const appShell = document.getElementById("appShell");
+  if (main && !main.id) main.id = "mainContent";
+
+  if (main && !document.querySelector(".skip-link")) {
+    const skipLink = document.createElement("a");
+    skipLink.className = "skip-link";
+    skipLink.href = "#mainContent";
+    skipLink.textContent = "Hoppa till innehållet";
+    document.body.prepend(skipLink);
+  }
+
+  const currentPage = location.pathname.split("/").pop() || "index.html";
+  document.querySelectorAll(".nav-link").forEach(link => {
+    const isCurrent = link.getAttribute("href") === currentPage;
+    link.classList.toggle("active", isCurrent);
+    if (isCurrent) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
   });
+
+  if (appShell) {
+    let footer = appShell.querySelector(":scope > footer");
+    if (!footer) {
+      footer = document.createElement("footer");
+      appShell.appendChild(footer);
+    }
+    footer.className = "app-footer";
+    footer.removeAttribute("style");
+    footer.textContent = `© ${new Date().getFullYear()} Mizzar — Staff Planner`;
+  }
 }
 
 function formatBreakEnd(start, durationMinutes) {
@@ -3091,6 +3112,53 @@ async function renderDashboard() {
   }));
 }
 
+const BACKUP_VERSION = 1;
+const MAX_BACKUP_SIZE_BYTES = 10 * 1024 * 1024;
+
+function isAppStorageKey(key) {
+  return key.startsWith("staff_") || key === STORAGE_KEYS.salt || key === STORAGE_KEYS.check;
+}
+
+function createBackupPayload() {
+  const data = {};
+  Object.keys(localStorage).forEach(key => {
+    if (isAppStorageKey(key)) data[key] = localStorage.getItem(key);
+  });
+  return {
+    app: "Staff Planner",
+    version: BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    data
+  };
+}
+
+function isValidBackupPayload(payload) {
+  if (
+    payload?.app !== "Staff Planner" ||
+    payload.version !== BACKUP_VERSION ||
+    !payload.data ||
+    typeof payload.data !== "object" ||
+    Array.isArray(payload.data)
+  ) {
+    return false;
+  }
+
+  return Object.entries(payload.data).every(([key, value]) =>
+    isAppStorageKey(key) && typeof value === "string"
+  );
+}
+
+function downloadBackup() {
+  const payload = createBackupPayload();
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `staff-planner-backup-${formatDateKey(new Date())}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 function setupDataTools() {
   const exportButton = document.getElementById("exportDataBtn");
   const importButton = document.getElementById("importDataBtn");
@@ -3098,17 +3166,7 @@ function setupDataTools() {
   if (exportButton && exportButton.dataset.bound !== "true") {
     exportButton.dataset.bound = "true";
     exportButton.addEventListener("click", () => {
-      const data = {};
-      Object.keys(localStorage).forEach(key => {
-        if (key.startsWith("staff_") || [STORAGE_KEYS.salt, STORAGE_KEYS.check].includes(key)) data[key] = localStorage.getItem(key);
-      });
-      const payload = { app: "Staff Planner", version: 1, exportedAt: new Date().toISOString(), data };
-      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `staff-planner-backup-${formatDateKey(new Date())}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBackup();
       void addAuditEvent("backup", "Backup exporterad", formatDateKey(new Date()));
     });
   }
@@ -3119,15 +3177,19 @@ function setupDataTools() {
       const file = input.files?.[0];
       if (!file) return;
       try {
+        if (file.size > MAX_BACKUP_SIZE_BYTES) throw new Error("Backup is too large");
         const payload = JSON.parse(await file.text());
-        if (payload?.app !== "Staff Planner" || !payload.data || typeof payload.data !== "object") throw new Error("Invalid backup");
+        if (!isValidBackupPayload(payload)) throw new Error("Invalid backup");
         if (!confirm("Importen ersätter all lokal data. Vill du fortsätta?")) return;
         clearPersistentData();
-        Object.entries(payload.data).forEach(([key, value]) => { if (typeof value === "string") localStorage.setItem(key, value); });
+        Object.entries(payload.data).forEach(([key, value]) => localStorage.setItem(key, value));
         clearStoredSessionPassword();
         location.reload();
       } catch (error) {
+        console.error("Could not import backup", error);
         alert("Backupfilen är ogiltig eller skadad.");
+      } finally {
+        input.value = "";
       }
     });
   }
@@ -3141,13 +3203,29 @@ function setupMobileNavigation() {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "mobile-nav-toggle";
+  if (!nav.id) nav.id = "mainNavigation";
+  button.setAttribute("aria-controls", nav.id);
   button.setAttribute("aria-expanded", "false");
   button.setAttribute("aria-label", "Öppna meny");
   button.innerHTML = "<span></span><span></span><span></span>";
   logo.insertAdjacentElement("afterend", button);
-  button.addEventListener("click", () => {
-    const open = sidebar.classList.toggle("nav-open");
+
+  const setMenuOpen = open => {
+    sidebar.classList.toggle("nav-open", open);
     button.setAttribute("aria-expanded", String(open));
+    button.setAttribute("aria-label", open ? "Stäng meny" : "Öppna meny");
+  };
+
+  button.addEventListener("click", () => {
+    setMenuOpen(!sidebar.classList.contains("nav-open"));
+  });
+  nav.addEventListener("click", event => {
+    if (event.target.closest(".nav-link")) setMenuOpen(false);
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key !== "Escape" || !sidebar.classList.contains("nav-open")) return;
+    setMenuOpen(false);
+    button.focus();
   });
 }
 
@@ -3311,7 +3389,7 @@ function setupAddForm() {
 }
 
 function initializeAppContent() {
-  ensureTodoNavigation();
+  enhanceAppShell();
   if (document.getElementById("breakPlanner")) {
     resetBreakPlannerToToday();
   }
@@ -3359,6 +3437,15 @@ async function setupAuthUI() {
     passwordConfirmInput,
     wipeBtn
   } = getAuthElements();
+
+  if (passwordInput) {
+    passwordInput.setAttribute("aria-label", "Lösenord");
+    passwordInput.autocomplete = hasPasswordSetup() ? "current-password" : "new-password";
+  }
+  if (passwordConfirmInput) {
+    passwordConfirmInput.setAttribute("aria-label", "Bekräfta lösenord");
+    passwordConfirmInput.autocomplete = "new-password";
+  }
 
   if (!authScreen || !appShell) {
     finishInitialViewSetup();
