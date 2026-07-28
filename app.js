@@ -87,7 +87,13 @@ const decoder = new TextDecoder();
 let sessionKey = null;
 let appUnlocked = false;
 let addMessageTimeoutId = null;
-let selectedBreakDay = DAYS[0];
+function getDefaultBreakDay() {
+  const weekday = new Date().getDay();
+  if (weekday >= 1 && weekday <= 5) return DAYS[weekday - 1];
+  return weekday === 6 ? DAYS[4] : DAYS[0];
+}
+
+let selectedBreakDay = getDefaultBreakDay();
 let selectedAssessmentPersonId = "";
 let selectedTestPersonId = "";
 let selectedProductionDate = formatDateKey(new Date());
@@ -3302,6 +3308,9 @@ function setupAddForm() {
 
 function initializeAppContent() {
   ensureTodoNavigation();
+  if (document.getElementById("breakPlanner")) {
+    selectedBreakDay = getDefaultBreakDay();
+  }
   renderWeekNavigation();
   void renderSchedule();
   void renderBreakPlanner();
@@ -3417,4 +3426,10 @@ async function setupAuthUI() {
 
 document.addEventListener("DOMContentLoaded", () => {
   void setupAuthUI();
+});
+
+window.addEventListener("pageshow", event => {
+  if (!event.persisted || !document.getElementById("breakPlanner")) return;
+  selectedBreakDay = getDefaultBreakDay();
+  void renderBreakPlanner();
 });
