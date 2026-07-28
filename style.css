@@ -502,10 +502,125 @@ body {
 .nav-link[href="dashboard.html"]::before { content: "⌂"; }
 .nav-link[href="produktion.html"]::before { content: "▥"; }
 .nav-link[href="rast.html"]::before { content: "◷"; }
+.nav-link[href="todo.html"]::before { content: "☑"; }
 .nav-link[href="personal.html"]::before { content: "♙"; }
 .nav-link[href="testresultat.html"]::before { content: "▤"; }
 .nav-link[href="maskiner.html"]::before { content: "⚙"; }
 .nav-link[href="add.html"]::before { content: "+"; font-size: 21px; }
+
+.todo-card {
+  max-width: 760px;
+}
+
+.todo-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.todo-form input {
+  flex: 1;
+  margin: 0;
+}
+
+.todo-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.todo-heading h3 {
+  margin: 0;
+}
+
+.todo-heading span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.todo-list {
+  display: grid;
+}
+
+.todo-notice {
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid #f5c86b;
+  border-radius: 12px;
+  background: #fff8e8;
+  color: #8a5a00;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px 4px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: opacity .25s ease, transform .25s ease;
+}
+
+.todo-item input {
+  width: 21px;
+  height: 21px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.todo-item span {
+  font-weight: 650;
+}
+
+.todo-item.is-complete {
+  color: var(--muted);
+  opacity: .55;
+}
+
+.todo-item.is-complete span {
+  text-decoration: line-through;
+}
+
+.todo-item small {
+  margin-left: auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #fff1d2;
+  color: #976100;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.todo-item.is-overdue {
+  background: linear-gradient(90deg, rgba(255, 248, 232, .85), transparent);
+}
+
+.todo-empty {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  padding: 48px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.todo-empty strong {
+  color: var(--text);
+  font-size: 18px;
+}
+
+@media (max-width: 600px) {
+  .todo-form { flex-direction: column; }
+  .todo-form .btn { width: 100%; }
+  .todo-item { align-items: flex-start; flex-wrap: wrap; }
+  .todo-item small { width: calc(100% - 34px); margin-left: 34px; }
+}
 
 .nav-link:hover {
   background: rgba(255, 255, 255, 0.065);

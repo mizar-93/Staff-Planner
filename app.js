@@ -61,6 +61,7 @@ const STORAGE_KEYS = {
   auditLog: "staff_audit_log_enc",
   productionRecords: "staff_production_records_enc",
   productionSettings: "staff_production_settings_enc",
+  todos: "staff_todos_enc",
   legacyPeople: "staff_people",
   legacySchedule: "staff_schedule"
 };
@@ -341,7 +342,7 @@ function normalizeBreakPlan(breakPlan) {
     normalized[day] = {
       ...normalized[day],
       ...stored,
-      mode: ["together", "together_split", "split"].includes(stored.mode)
+      mode: ["together", "together_split", "split", "split_hour"].includes(stored.mode)
         ? stored.mode
         : "together",
       groups: stored.groups && typeof stored.groups === "object" ? stored.groups : {},
@@ -1224,6 +1225,127 @@ async function saveBreakPlan(breakPlan) {
   localStorage.setItem(STORAGE_KEYS.breakPlanWeek, getSelectedWeekKey());
 }
 
+async function getTodos() {
+  if (!appUnlocked || !sessionKey) return [];
+  const todos = await decryptStoredItem(STORAGE_KEYS.todos, []);
+  return Array.isArray(todos) ? todos : [];
+}
+
+async function saveTodos(todos) {
+  await encryptStoredItem(STORAGE_KEYS.todos, todos);
+}
+
+function getTodoWeekKey(dateValue = new Date()) {
+  const date = new Date(dateValue);
+  const day = date.getDay();
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - day + (day === 0 ? -6 : 1));
+  monday.setHours(0, 0, 0, 0);
+  return formatDateKey(monday);
+}
+
+async function renderTodoList() {
+  const list = document.getElementById("todoList");
+  const count = document.getElementById("todoCount");
+  const notice = document.getElementById("todoNotice");
+  if (!list) return;
+
+  const currentWeek = getTodoWeekKey();
+  const storedTodos = await getTodos();
+  const todos = storedTodos
+    .map(todo => ({
+      ...todo,
+      createdWeek: todo.createdWeek || getTodoWeekKey(todo.createdAt || new Date())
+    }))
+    .filter(todo => !todo.completedAt || todo.completedWeek === currentWeek);
+  if (todos.length !== storedTodos.length || todos.some((todo, index) => todo.createdWeek !== storedTodos[index]?.createdWeek)) {
+    await saveTodos(todos);
+  }
+
+  const remaining = todos.filter(todo => !todo.completedAt);
+  const overdue = remaining.filter(todo => todo.createdWeek < currentWeek);
+  list.innerHTML = "";
+  if (count) count.textContent = `${remaining.length} ${remaining.length === 1 ? "uppgift kvar" : "uppgifter kvar"}`;
+  if (notice) {
+    notice.classList.toggle("hidden", overdue.length === 0);
+    notice.textContent = overdue.length === 1
+      ? "Du har 1 uppgift från förra veckan som inte är klar."
+      : `Du har ${overdue.length} uppgifter från tidigare veckor som inte är klara.`;
+  }
+
+  if (!todos.length) {
+    list.innerHTML = '<div class="todo-empty"><strong>Allt är klart!</strong><span>Lägg till en ny uppgift ovan.</span></div>';
+    return;
+  }
+
+  todos.forEach(todo => {
+    const item = document.createElement("label");
+    const checkbox = document.createElement("input");
+    const text = document.createElement("span");
+    const isComplete = Boolean(todo.completedAt);
+    const isOverdue = !isComplete && todo.createdWeek < currentWeek;
+    item.className = `todo-item${isComplete ? " is-complete" : ""}${isOverdue ? " is-overdue" : ""}`;
+    checkbox.type = "checkbox";
+    checkbox.checked = isComplete;
+    checkbox.setAttribute("aria-label", `Markera ${todo.text} som klar`);
+    text.textContent = todo.text;
+    if (isOverdue) {
+      const overdueLabel = document.createElement("small");
+      overdueLabel.textContent = "Inte klar från förra veckan";
+      item.append(checkbox, text, overdueLabel);
+    } else {
+      item.append(checkbox, text);
+    }
+    checkbox.addEventListener("change", async () => {
+      todo.completedAt = checkbox.checked ? new Date().toISOString() : "";
+      todo.completedWeek = checkbox.checked ? currentWeek : "";
+      await saveTodos(todos);
+      await renderTodoList();
+    });
+    list.appendChild(item);
+  });
+}
+
+function setupTodoPage() {
+  const form = document.getElementById("todoForm");
+  const input = document.getElementById("todoInput");
+  if (!form || !input || form.dataset.bound === "true") return;
+  form.dataset.bound = "true";
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) {
+      input.focus();
+      return;
+    }
+    const todos = await getTodos();
+    todos.push({
+      id: makeId(),
+      text,
+      createdAt: new Date().toISOString(),
+      createdWeek: getTodoWeekKey(),
+      completedAt: "",
+      completedWeek: ""
+    });
+    await saveTodos(todos);
+    form.reset();
+    await renderTodoList();
+    input.focus();
+  });
+}
+
+function ensureTodoNavigation() {
+  document.querySelectorAll(".nav").forEach(nav => {
+    if (nav.querySelector('[href="todo.html"]')) return;
+    const link = document.createElement("a");
+    link.className = "nav-link";
+    link.href = "todo.html";
+    link.textContent = "Att göra";
+    const addLink = nav.querySelector('[href="add.html"]');
+    nav.insertBefore(link, addLink || null);
+  });
+}
+
 function formatBreakEnd(start, durationMinutes) {
   if (!start) return "Välj tid";
 
@@ -1314,6 +1436,7 @@ async function renderBreakPlanner() {
     <option value="together">Gemensam rast · 60 minuter</option>
     <option value="together_split">Gemensamt · 2 × 30 minuter</option>
     <option value="split">Två grupper · 2 × 30 minuter</option>
+    <option value="split_hour">Två grupper · 60 minuter</option>
   `;
   modeSelect.value = dayPlan.mode;
   modeSelect.addEventListener("change", async () => {
@@ -1456,9 +1579,10 @@ async function renderBreakPlanner() {
   [1, 2].forEach(groupNumber => {
     const panel = document.createElement("div");
     const title = document.createElement("div");
+    const isHourlySplit = dayPlan.mode === "split_hour";
     panel.className = `break-group-panel group-${groupNumber}`;
     title.className = "break-group-title";
-    title.innerHTML = `<strong>Grupp ${groupNumber}</strong><span>2 × 30 min</span>`;
+    title.innerHTML = `<strong>Grupp ${groupNumber}</strong><span>${isHourlySplit ? "60 min" : "2 × 30 min"}</span>`;
     panel.appendChild(title);
 
     const groupPeople = scheduledPeople
@@ -1483,16 +1607,18 @@ async function renderBreakPlanner() {
 
     panel.appendChild(members);
 
-    panel.appendChild(makeTimeField("Rast 1", dayPlan[`group${groupNumber}Break1`], 30, async value => {
+    panel.appendChild(makeTimeField(isHourlySplit ? "Starttid" : "Rast 1", dayPlan[`group${groupNumber}Break1`], isHourlySplit ? 60 : 30, async value => {
       dayPlan[`group${groupNumber}Break1`] = value;
       await saveBreakPlan(breakPlan);
       await renderBreakPlanner();
     }));
-    panel.appendChild(makeTimeField("Rast 2", dayPlan[`group${groupNumber}Break2`], 30, async value => {
-      dayPlan[`group${groupNumber}Break2`] = value;
-      await saveBreakPlan(breakPlan);
-      await renderBreakPlanner();
-    }));
+    if (!isHourlySplit) {
+      panel.appendChild(makeTimeField("Rast 2", dayPlan[`group${groupNumber}Break2`], 30, async value => {
+        dayPlan[`group${groupNumber}Break2`] = value;
+        await saveBreakPlan(breakPlan);
+        await renderBreakPlanner();
+      }));
+    }
     groupsGrid.appendChild(panel);
   });
   root.appendChild(groupsGrid);
@@ -3175,6 +3301,7 @@ function setupAddForm() {
 }
 
 function initializeAppContent() {
+  ensureTodoNavigation();
   renderWeekNavigation();
   void renderSchedule();
   void renderBreakPlanner();
@@ -3185,10 +3312,12 @@ function initializeAppContent() {
   void renderTrainingReminders();
   void renderDashboard();
   void renderProduction();
+  void renderTodoList();
   setupAddForm();
   setupAutoSchedule();
   setupMobileNavigation();
   setupFilterControls();
+  setupTodoPage();
 }
 
 async function openAppUI() {
