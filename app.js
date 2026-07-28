@@ -3035,37 +3035,47 @@ async function renderProduction() {
   const target = Number(record.target) || settings.dailyTarget;
   const personOptions = (selectedId, savedName = "") => `<option value="">Välj person</option>${selectedId && !people.some(person => person.id === selectedId) ? `<option value="${selectedId}" selected>${escapeHtml(savedName || "Tidigare personal")}</option>` : ""}${people.map(person => `<option value="${person.id}"${person.id === selectedId ? " selected" : ""}>${escapeHtml(person.name)}</option>`).join("")}`;
   root.innerHTML = `
-    <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label><label>Fabriksrekord<input id="factoryRecord" type="number" min="0" value="${settings.factoryRecord}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn primary" type="button">Spara dagen</button></div>
-    <div class="production-kpis"><article id="productionTotalCard" class="${total >= target ? "goal-card-met" : "goal-card-missed"}"><span>Dagens produktion</span><strong id="productionTotal">${total}</strong><small>box totalt</small></article><article><span>Dagligt mål</span><strong id="productionGoalValue">${target}</strong><small>box</small></article><article><span>Fabriksrekord</span><strong id="factoryRecordValue">${settings.factoryRecord}</strong><small>officiellt rekord</small></article></div>
+    <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn primary" type="button">Spara dagen</button></div>
+    <div class="production-kpis"><article id="productionTotalCard" class="${total >= target ? "goal-card-met" : "goal-card-missed"}"><span>Dagens produktion</span><strong id="productionTotal">${total}</strong><small>box totalt</small></article><article><span>Dagligt mål</span><strong id="productionGoalValue">${target}</strong><small>box</small></article><article class="factory-record-card"><span>Fabriksrekord</span><strong id="factoryRecordValue">${settings.factoryRecord}</strong><small>officiellt rekord · uppdateras vid nytt rekord</small><button id="editFactoryRecordBtn" type="button">Ändra manuellt</button></article></div>
     <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${machine.replace("GD", "GD-")}</strong><label>Operatör<select data-machine="${machine}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Resultat (BOX)<input data-machine="${machine}" data-field="result" class="production-result" type="number" min="0" value="${item.result ?? ""}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${machine}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
     <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Öppna en tidigare dag för att visa eller ändra resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<button type="button" data-production-date="${item.date}" class="${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
   `;
   const updateSummary = () => {
     const currentTotal = [...root.querySelectorAll(".production-result")].reduce((sum, input) => sum + (Number(input.value) || 0), 0);
     const currentTarget = Number(root.querySelector("#productionTarget").value) || 0;
-    const currentFactoryRecord = Number(root.querySelector("#factoryRecord").value) || 0;
     root.querySelector("#productionTotal").textContent = currentTotal;
     root.querySelector("#productionGoalValue").textContent = currentTarget;
-    root.querySelector("#factoryRecordValue").textContent = currentFactoryRecord;
     root.querySelector("#productionTotalCard").className = currentTotal >= currentTarget ? "goal-card-met" : "goal-card-missed";
     const status = root.querySelector("#productionStatus");
     status.textContent = currentTotal >= currentTarget ? "Målet uppnått" : "Under målet";
     status.className = `production-status ${currentTotal >= currentTarget ? "goal-met" : "goal-missed"}`;
   };
-  root.querySelectorAll(".production-result, #productionTarget, #factoryRecord").forEach(input => input.addEventListener("input", updateSummary));
+  root.querySelectorAll(".production-result, #productionTarget").forEach(input => input.addEventListener("input", updateSummary));
   root.querySelector("#productionDate").addEventListener("change", event => { selectedProductionDate = event.target.value; void renderProduction(); });
   root.querySelector("#syncScheduleBtn").addEventListener("click", async () => {
     const currentSchedule = await getScheduleForDate(selectedProductionDate);
     machines.forEach(machine => { const select = root.querySelector(`[data-machine="${machine}"][data-field="personId"]`); select.value = scheduleDay ? currentSchedule[machine]?.[scheduleDay] || "" : ""; });
   });
+  root.querySelector("#editFactoryRecordBtn").addEventListener("click", async () => {
+    const enteredValue = prompt("Ange fabriksrekord (box):", String(settings.factoryRecord));
+    if (enteredValue === null) return;
+    const newRecord = Number(enteredValue);
+    if (!Number.isFinite(newRecord) || newRecord < 0) {
+      alert("Ange ett giltigt fabriksrekord.");
+      return;
+    }
+    settings.factoryRecord = Math.round(newRecord);
+    await saveProductionSettings(settings);
+    await addAuditEvent("production", "Fabriksrekord ändrat", `${settings.factoryRecord} box`);
+    await renderProduction();
+  });
   root.querySelector("#saveProductionBtn").addEventListener("click", async () => {
-    const previousRecord = Number(root.querySelector("#factoryRecord").value) || 0;
+    const previousRecord = settings.factoryRecord;
     const dayRecord = { date: selectedProductionDate, target: Number(root.querySelector("#productionTarget").value) || 0, machines: {}, updatedAt: new Date().toISOString() };
     machines.forEach(machine => { const personId = root.querySelector(`[data-machine="${machine}"][data-field="personId"]`).value; dayRecord.machines[machine] = { personId, personName: people.find(person => person.id === personId)?.name || "", result: Number(root.querySelector(`[data-machine="${machine}"][data-field="result"]`).value) || 0, comment: root.querySelector(`[data-machine="${machine}"][data-field="comment"]`).value.trim() }; });
     dayRecord.total = machines.reduce((sum, machine) => sum + dayRecord.machines[machine].result, 0);
     records[selectedProductionDate] = dayRecord;
     settings.dailyTarget = dayRecord.target;
-    settings.factoryRecord = previousRecord;
     const brokeRecord = dayRecord.total > settings.factoryRecord;
     if (brokeRecord) settings.factoryRecord = dayRecord.total;
     await Promise.all([saveProductionRecords(records), saveProductionSettings(settings)]);
