@@ -93,6 +93,10 @@ function getDefaultBreakDay() {
   return weekday === 6 ? DAYS[4] : DAYS[0];
 }
 
+function resetBreakPlannerToToday() {
+  selectedBreakDay = getDefaultBreakDay();
+}
+
 let selectedBreakDay = getDefaultBreakDay();
 let selectedAssessmentPersonId = "";
 let selectedTestPersonId = "";
@@ -3309,7 +3313,7 @@ function setupAddForm() {
 function initializeAppContent() {
   ensureTodoNavigation();
   if (document.getElementById("breakPlanner")) {
-    selectedBreakDay = getDefaultBreakDay();
+    resetBreakPlannerToToday();
   }
   renderWeekNavigation();
   void renderSchedule();
@@ -3430,6 +3434,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 window.addEventListener("pageshow", event => {
   if (!event.persisted || !document.getElementById("breakPlanner")) return;
-  selectedBreakDay = getDefaultBreakDay();
+  resetBreakPlannerToToday();
+  renderWeekNavigation();
   void renderBreakPlanner();
 });
