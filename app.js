@@ -16,6 +16,23 @@ const TASKS = [
 const DAYS = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"];
 const DEFAULT_PEOPLE = [];
 const DEFAULT_DEPARTMENTS = ["GD", "ETIKETTO", "Logimark", "Packa"];
+const BREAK_LINE_WORKPLACES = {
+  GD1: ["GD1", "ETIKETTO", "Packa L1"],
+  GD2: ["GD2", "Logimark", "Packa L2/3"],
+  GD3: ["GD3", "Logimark", "Packa L2/3"],
+  GD4: ["GD4", "miniLogimark", "Packa L4"]
+};
+const BREAK_LINE_LABELS = {
+  GD1: "Linje 1",
+  GD2: "Linje 2",
+  GD3: "Linje 3",
+  GD4: "Linje 4"
+};
+const BREAK_WORKPLACE_DISPLAY_ORDER = [
+  "GD1", "GD2", "GD3", "GD4",
+  "Logimark", "ETIKETTO", "miniLogimark",
+  "Packa L1", "Packa L2/3", "Packa L4"
+];
 
 const BASIC_ASSESSMENT_ITEMS = [
   "Punktlig och pålitlig",
@@ -339,6 +356,7 @@ function createEmptyBreakPlan() {
     group1Break2: "",
     group2Break1: "",
     group2Break2: "",
+    priorityLines: [],
     groups: {},
     workplaces: {}
   }]));
@@ -355,6 +373,11 @@ function normalizeBreakPlan(breakPlan) {
       mode: ["together", "together_split", "split", "split_hour"].includes(stored.mode)
         ? stored.mode
         : "together",
+      priorityLines: Array.isArray(stored.priorityLines)
+        ? stored.priorityLines.filter(line => Object.hasOwn(BREAK_LINE_WORKPLACES, line))
+        : Object.hasOwn(BREAK_LINE_WORKPLACES, stored.priorityLine)
+          ? [stored.priorityLine]
+          : [],
       groups: stored.groups && typeof stored.groups === "object" ? stored.groups : {},
       workplaces: stored.workplaces && typeof stored.workplaces === "object"
         ? stored.workplaces
@@ -1394,6 +1417,97 @@ function getScheduledPeopleForDay(schedule, people, day) {
   return people.filter(person => scheduledIds.has(person.id));
 }
 
+function getScheduledWorkplaceByPerson(schedule, day) {
+  const workplaces = {};
+  TASKS.filter(task => !task.includes("Utbildning")).forEach(task => {
+    const personId = schedule?.[task]?.[day];
+    if (personId && !workplaces[personId]) workplaces[personId] = task;
+  });
+  return workplaces;
+}
+
+function canCoverBreakWorkplace(personId, workplace, skills, restrictions) {
+  const department = getTaskDepartment(workplace);
+  const personSkills = Array.isArray(skills[personId]) ? skills[personId] : [];
+  const personRestrictions = Array.isArray(restrictions[personId])
+    ? restrictions[personId]
+    : [];
+  return personSkills.includes(department) &&
+    !(department === "GD" && personRestrictions.includes("GD"));
+}
+
+function getRequiredBreakWorkplaces(priorityLines) {
+  return [...new Set(
+    priorityLines.flatMap(line => BREAK_LINE_WORKPLACES[line] || [])
+  )];
+}
+
+function compareBreakWorkplaces(firstWorkplace, secondWorkplace) {
+  const firstIndex = BREAK_WORKPLACE_DISPLAY_ORDER.indexOf(firstWorkplace);
+  const secondIndex = BREAK_WORKPLACE_DISPLAY_ORDER.indexOf(secondWorkplace);
+  const normalizedFirstIndex = firstIndex === -1
+    ? BREAK_WORKPLACE_DISPLAY_ORDER.length
+    : firstIndex;
+  const normalizedSecondIndex = secondIndex === -1
+    ? BREAK_WORKPLACE_DISPLAY_ORDER.length
+    : secondIndex;
+  return normalizedFirstIndex - normalizedSecondIndex ||
+    String(firstWorkplace || "").localeCompare(String(secondWorkplace || ""), "sv");
+}
+
+function createAutomaticBreakGroups(
+  scheduledPeople,
+  schedule,
+  day,
+  skills,
+  restrictions,
+  priorityLines
+) {
+  const groups = {};
+  const workplaces = {};
+  const scheduledWorkplaces = getScheduledWorkplaceByPerson(schedule, day);
+  const unusedPeople = new Map(scheduledPeople.map((person, index) => [person.id, { person, index }]));
+  const missing = [];
+
+  const requiredWorkplaces = getRequiredBreakWorkplaces(priorityLines);
+  requiredWorkplaces.forEach(workplace => {
+    [1, 2].forEach(groupNumber => {
+      const candidates = [...unusedPeople.values()]
+        .filter(({ person }) => canCoverBreakWorkplace(person.id, workplace, skills, restrictions))
+        .sort((first, second) => {
+          const firstExact = scheduledWorkplaces[first.person.id] === workplace ? 0 : 1;
+          const secondExact = scheduledWorkplaces[second.person.id] === workplace ? 0 : 1;
+          const firstSkills = requiredWorkplaces.filter(requiredWorkplace =>
+            canCoverBreakWorkplace(first.person.id, requiredWorkplace, skills, restrictions)
+          ).length;
+          const secondSkills = requiredWorkplaces.filter(requiredWorkplace =>
+            canCoverBreakWorkplace(second.person.id, requiredWorkplace, skills, restrictions)
+          ).length;
+          return firstExact - secondExact || firstSkills - secondSkills || first.index - second.index;
+        });
+      const selected = candidates[0];
+      if (!selected) {
+        missing.push(`Grupp ${groupNumber}: ${workplace}`);
+        return;
+      }
+      groups[selected.person.id] = groupNumber;
+      workplaces[selected.person.id] = workplace;
+      unusedPeople.delete(selected.person.id);
+    });
+  });
+
+  const extraPeople = [];
+  unusedPeople.forEach(({ person }) => {
+    const group1Count = Object.values(groups).filter(group => group === 1).length;
+    const group2Count = Object.values(groups).filter(group => group === 2).length;
+    const groupNumber = group1Count <= group2Count ? 1 : 2;
+    groups[person.id] = groupNumber;
+    extraPeople.push(person);
+  });
+
+  return { groups, workplaces, missing, extraPeople };
+}
+
 function makeTimeField(labelText, value, duration, onChange) {
   const field = document.createElement("label");
   const title = document.createElement("span");
@@ -1471,7 +1585,11 @@ async function renderBreakPlanner() {
   `;
   modeSelect.value = dayPlan.mode;
   modeSelect.addEventListener("change", async () => {
+    const previousMode = dayPlan.mode;
     dayPlan.mode = modeSelect.value;
+    const enteredGroupMode = ["split", "split_hour"].includes(dayPlan.mode) &&
+      !["split", "split_hour"].includes(previousMode);
+    if (enteredGroupMode) dayPlan.priorityLines = [];
     await saveBreakPlan(breakPlan);
     await renderBreakPlanner();
   });
@@ -1506,6 +1624,40 @@ async function renderBreakPlanner() {
     return;
   }
 
+  const priorityPanel = document.createElement("section");
+  const priorityHeading = document.createElement("div");
+  const priorityOptions = document.createElement("div");
+  priorityPanel.className = "break-priority-panel";
+  priorityHeading.className = "break-priority-heading";
+  priorityHeading.innerHTML = `
+    <strong>Vilka linjer har prioritet?</strong>
+    <small>Välj en eller flera linjer. Kopplade stationer tas med automatiskt.</small>
+  `;
+  priorityOptions.className = "break-priority-options";
+  Object.entries(BREAK_LINE_LABELS).forEach(([line, label]) => {
+    const option = document.createElement("label");
+    const checkbox = document.createElement("input");
+    const text = document.createElement("span");
+    option.className = "break-priority-option";
+    checkbox.type = "checkbox";
+    checkbox.value = line;
+    checkbox.checked = dayPlan.priorityLines.includes(line);
+    text.textContent = label;
+    checkbox.addEventListener("change", async () => {
+      dayPlan.priorityLines = checkbox.checked
+        ? [...new Set([...dayPlan.priorityLines, line])]
+        : dayPlan.priorityLines.filter(selectedLine => selectedLine !== line);
+      dayPlan.distributionNotice = "";
+      dayPlan.distributionNoticeType = "";
+      await saveBreakPlan(breakPlan);
+      await renderBreakPlanner();
+    });
+    option.append(checkbox, text);
+    priorityOptions.appendChild(option);
+  });
+  priorityPanel.append(priorityHeading, priorityOptions);
+  root.appendChild(priorityPanel);
+
   const assignment = document.createElement("section");
   const assignmentHeading = document.createElement("div");
   const assignmentList = document.createElement("div");
@@ -1516,9 +1668,72 @@ async function renderBreakPlanner() {
       <h4>Fördela personal</h4>
       <p>Välj grupp för varje person som arbetar den här dagen.</p>
     </div>
-    <span>${scheduledPeople.length} personer</span>
+    <div class="break-assignment-actions">
+      <span>${scheduledPeople.length} personer</span>
+      <button type="button" class="btn primary break-auto-groups-btn">Skapa två grupper</button>
+    </div>
   `;
   assignmentList.className = "break-assignment-list";
+
+  const autoGroupsButton = assignmentHeading.querySelector(".break-auto-groups-btn");
+  autoGroupsButton.disabled = !scheduledPeople.length || !dayPlan.priorityLines.length;
+  if (!dayPlan.priorityLines.length) autoGroupsButton.title = "Välj minst en linje först";
+  autoGroupsButton.addEventListener("click", async () => {
+    autoGroupsButton.disabled = true;
+    autoGroupsButton.textContent = "Skapar grupper…";
+    const [skills, restrictions] = await Promise.all([
+      getMachineSkills(),
+      getMachineRestrictions()
+    ]);
+    const result = createAutomaticBreakGroups(
+      scheduledPeople,
+      schedule,
+      selectedBreakDay,
+      skills,
+      restrictions,
+      dayPlan.priorityLines
+    );
+    const selectedLineNames = dayPlan.priorityLines
+      .map(line => BREAK_LINE_LABELS[line])
+      .join(", ");
+    dayPlan.groups = result.groups;
+    dayPlan.workplaces = result.workplaces;
+    const needsAdjustment = result.missing.length || result.extraPeople.length;
+    const extraSummary = result.extraPeople.length
+      ? ` ${result.extraPeople.length} ${result.extraPeople.length === 1 ? "extra person saknar" : "extra personer saknar"} arbetsplats.`
+      : "";
+    dayPlan.distributionNoticeType = needsAdjustment ? "warning" : "success";
+    dayPlan.distributionNotice = needsAdjustment
+      ? `Fördelningen behöver justeras.${extraSummary} Se detaljer under respektive grupp.`
+      : `Två kompletta grupper för ${selectedLineNames} och deras kopplade stationer har skapats.`;
+    await saveBreakPlan(breakPlan);
+    await renderBreakPlanner();
+  });
+
+  assignment.appendChild(assignmentHeading);
+  if (dayPlan.distributionNotice) {
+    const notice = document.createElement("p");
+    const requiredWorkplaces = getRequiredBreakWorkplaces(dayPlan.priorityLines || []);
+    const missingCount = [1, 2].reduce((total, groupNumber) => {
+      const occupied = new Set(scheduledPeople
+        .filter(person => dayPlan.groups[person.id] === groupNumber)
+        .map(person => dayPlan.workplaces[person.id])
+        .filter(Boolean));
+      return total + requiredWorkplaces.filter(workplace => !occupied.has(workplace)).length;
+    }, 0);
+    const extraCount = scheduledPeople.filter(person =>
+      dayPlan.groups[person.id] && !dayPlan.workplaces[person.id]
+    ).length;
+    const needsAdjustment = missingCount || extraCount;
+    const extraSummary = extraCount
+      ? ` ${extraCount} ${extraCount === 1 ? "extra person saknar" : "extra personer saknar"} arbetsplats.`
+      : "";
+    notice.className = `break-distribution-notice ${needsAdjustment ? "warning" : "success"}`;
+    notice.textContent = needsAdjustment
+      ? `Fördelningen behöver justeras.${extraSummary} Se detaljer under respektive grupp.`
+      : "Fördelningen är komplett. Du kan fortfarande redigera grupperna manuellt.";
+    assignment.appendChild(notice);
+  }
 
   scheduledPeople.forEach(person => {
     const row = document.createElement("div");
@@ -1602,7 +1817,7 @@ async function renderBreakPlanner() {
     assignmentList.innerHTML = "<p class=\"break-empty\">Ingen personal är schemalagd den här dagen.</p>";
   }
 
-  assignment.append(assignmentHeading, assignmentList);
+  assignment.appendChild(assignmentList);
   root.appendChild(assignment);
 
   const groupsGrid = document.createElement("div");
@@ -1617,7 +1832,15 @@ async function renderBreakPlanner() {
     panel.appendChild(title);
 
     const groupPeople = scheduledPeople
-      .filter(person => dayPlan.groups[person.id] === groupNumber);
+      .filter(person => dayPlan.groups[person.id] === groupNumber)
+      .sort((first, second) => {
+        const firstWorkplace = dayPlan.workplaces[first.id] || "";
+        const secondWorkplace = dayPlan.workplaces[second.id] || "";
+        if (!firstWorkplace && secondWorkplace) return 1;
+        if (firstWorkplace && !secondWorkplace) return -1;
+        return compareBreakWorkplaces(firstWorkplace, secondWorkplace) ||
+          first.name.localeCompare(second.name, "sv");
+      });
     const members = document.createElement("div");
     members.className = "break-group-summary";
 
@@ -1628,7 +1851,7 @@ async function renderBreakPlanner() {
         const memberWorkplace = document.createElement("span");
         member.className = "break-group-person";
         memberName.textContent = person.name;
-        memberWorkplace.textContent = dayPlan.workplaces[person.id] || "Ingen placering";
+        memberWorkplace.textContent = dayPlan.workplaces[person.id] || "Extra · ingen arbetsplats";
         member.append(memberName, memberWorkplace);
         members.appendChild(member);
       });
@@ -1637,6 +1860,29 @@ async function renderBreakPlanner() {
     }
 
     panel.appendChild(members);
+
+    const requiredWorkplaces = getRequiredBreakWorkplaces(dayPlan.priorityLines || []);
+    const occupiedWorkplaces = new Set(
+      groupPeople.map(person => dayPlan.workplaces[person.id]).filter(Boolean)
+    );
+    const missingWorkplaces = requiredWorkplaces
+      .filter(workplace => !occupiedWorkplaces.has(workplace))
+      .sort(compareBreakWorkplaces);
+    if (missingWorkplaces.length) {
+      const shortage = document.createElement("div");
+      const shortageTitle = document.createElement("strong");
+      const shortageList = document.createElement("span");
+      shortage.className = "break-group-shortage";
+      shortageTitle.textContent = "Saknas i gruppen";
+      shortageList.textContent = missingWorkplaces.join(", ");
+      shortage.append(shortageTitle, shortageList);
+      panel.appendChild(shortage);
+    } else if (requiredWorkplaces.length) {
+      const complete = document.createElement("div");
+      complete.className = "break-group-complete";
+      complete.textContent = "Alla valda maskiner och avdelningar är bemannade";
+      panel.appendChild(complete);
+    }
 
     panel.appendChild(makeTimeField(isHourlySplit ? "Starttid" : "Rast 1", dayPlan[`group${groupNumber}Break1`], isHourlySplit ? 60 : 30, async value => {
       dayPlan[`group${groupNumber}Break1`] = value;
