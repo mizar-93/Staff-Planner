@@ -2644,10 +2644,21 @@ async function renderPeople() {
   const allPeople = await getPeople();
   const query = (document.getElementById("peopleSearch")?.value || "").trim().toLocaleLowerCase();
   const statusFilter = document.getElementById("availabilityFilter")?.value || "";
-  const people = allPeople.filter(person =>
-    (!query || `${person.name} ${person.company || ""}`.toLocaleLowerCase().includes(query)) &&
-    (!statusFilter || getPersonAvailability(person) === statusFilter)
-  );
+  const availabilityOrder = {
+    available: 0,
+    vacation: 1,
+    sick: 2,
+    unavailable: 3
+  };
+  const people = allPeople
+    .filter(person =>
+      (!query || `${person.name} ${person.company || ""}`.toLocaleLowerCase().includes(query)) &&
+      (!statusFilter || getPersonAvailability(person) === statusFilter)
+    )
+    .sort((firstPerson, secondPerson) =>
+      (availabilityOrder[getPersonAvailability(firstPerson)] ?? 4) -
+      (availabilityOrder[getPersonAvailability(secondPerson)] ?? 4)
+    );
   list.innerHTML = "";
 
   people.forEach(person => {
