@@ -120,6 +120,7 @@ let selectedTestPersonId = "";
 let selectedProductionDate = formatDateKey(new Date());
 let selectedCompetencyPersonId = "";
 let assessmentFormOpen = false;
+let editingAssessmentId = "";
 
 function padNumber(value) {
   return String(value).padStart(2, "0");
@@ -1111,7 +1112,16 @@ async function saveProductionSettings(settings) {
 async function getAuditLog() {
   if (!appUnlocked || !sessionKey) return [];
   const events = await decryptStoredItem(STORAGE_KEYS.auditLog, []);
-  return Array.isArray(events) ? events : [];
+  if (!Array.isArray(events)) return [];
+  const today = formatDateKey(new Date());
+  const todaysEvents = events.filter(event => {
+    const createdAt = new Date(event?.createdAt);
+    return !Number.isNaN(createdAt.getTime()) && formatDateKey(createdAt) === today;
+  });
+  if (todaysEvents.length !== events.length) {
+    await encryptStoredItem(STORAGE_KEYS.auditLog, todaysEvents);
+  }
+  return todaysEvents;
 }
 
 async function addAuditEvent(type, title, detail = "", undo = null) {
@@ -2057,7 +2067,7 @@ function renderSummaryList(title, items, emptyText, className) {
   `;
 }
 
-function renderAssessmentRecord(assessment, previousAssessment = null, assessmentNumber = 1) {
+function renderAssessmentRecord(assessment, previousAssessment = null, assessmentNumber = 1, onEdit = null) {
   const details = document.createElement("details");
   const summary = document.createElement("summary");
   const content = document.createElement("div");
@@ -2091,6 +2101,7 @@ function renderAssessmentRecord(assessment, previousAssessment = null, assessmen
   `;
   content.className = "assessment-record-content";
   content.innerHTML = `
+    <div class="assessment-record-actions"><button class="btn" type="button" data-action="edit-assessment">Redigera</button></div>
     <div class="assessment-auto-summary">
       <div class="assessment-auto-summary-heading"><div><span>Automatisk sammanfattning</span><h5>Bedömning ${assessmentNumber}</h5></div><strong>${getAssessmentAverage(assessment)}/5</strong></div>
       <p class="assessment-level-text">${escapeHtml(automaticSummary.level)}</p>
@@ -2121,17 +2132,22 @@ function renderAssessmentRecord(assessment, previousAssessment = null, assessmen
       <span><small>Intern klassning</small><strong>${escapeHtml(assessment.classification || "—")}</strong></span>
     </div>
   `;
+  content.querySelector('[data-action="edit-assessment"]')?.addEventListener("click", event => {
+    event.preventDefault();
+    if (onEdit) onEdit();
+  });
   details.append(summary, content);
   return details;
 }
 
-function createAssessmentForm(person, onCancel) {
+function createAssessmentForm(person, onCancel, assessment = null) {
   const form = document.createElement("form");
   const today = formatDateKey(new Date());
+  const isEditing = Boolean(assessment);
   form.className = "assessment-form";
   form.innerHTML = `
     <div class="assessment-form-heading">
-      <div><span>Ny bedömning</span><h3>${escapeHtml(person.name)}</h3></div>
+      <div><span>${isEditing ? "Redigera bedömning" : "Ny bedömning"}</span><h3>${escapeHtml(person.name)}</h3></div>
       <button class="btn" type="button" id="cancelAssessment">Avbryt</button>
     </div>
 
@@ -2191,8 +2207,26 @@ function createAssessmentForm(person, onCancel) {
       <label>Motivering<textarea name="motivation" rows="3" placeholder="Samlad motivering"></textarea></label>
     </section>
 
-    <div class="assessment-submit-bar"><span>Bedömningen sparas säkert i personens historik.</span><button class="btn primary" type="submit">Spara bedömning</button></div>
+    <div class="assessment-submit-bar"><span>Bedömningen sparas säkert i personens historik.</span><button class="btn primary" type="submit">${isEditing ? "Spara ändringar" : "Spara bedömning"}</button></div>
   `;
+
+  if (assessment) {
+    const setValue = (name, value) => {
+      const field = form.elements.namedItem(name);
+      if (field) field.value = value ?? "";
+    };
+    ["date", "period", "shiftDepartment", "leader", "totalShifts", "absence", "strengths", "development",
+      "fullTime", "potential", "recommendation", "classification", "motivation"]
+      .forEach(name => setValue(name, assessment[name]));
+    BASIC_ASSESSMENT_ITEMS.forEach((_, index) => {
+      setValue(`basicAnswer${index}`, assessment.basic?.[index]?.answer);
+      setValue(`basicComment${index}`, assessment.basic?.[index]?.comment);
+    });
+    PERFORMANCE_ASSESSMENT_ITEMS.forEach((_, index) => {
+      setValue(`rating${index}`, assessment.ratings?.[index]?.score);
+      setValue(`ratingComment${index}`, assessment.ratings?.[index]?.comment);
+    });
+  }
 
   form.querySelector("#cancelAssessment").addEventListener("click", onCancel);
   form.addEventListener("submit", async event => {
@@ -2207,17 +2241,26 @@ function createAssessmentForm(person, onCancel) {
     PERFORMANCE_ASSESSMENT_ITEMS.forEach((_, index) => {
       ratings[index] = { score: data.get(`rating${index}`) || "", comment: data.get(`ratingComment${index}`).trim() };
     });
-    assessments.push({
-      id: makeId(), personId: person.id, employeeName: person.name, createdAt: new Date().toISOString(),
+    const savedAssessment = {
+      id: assessment?.id || makeId(), personId: person.id, employeeName: person.name,
+      createdAt: assessment?.createdAt || new Date().toISOString(), updatedAt: isEditing ? new Date().toISOString() : undefined,
       date: data.get("date"), period: data.get("period"), shiftDepartment: data.get("shiftDepartment").trim(),
       leader: data.get("leader").trim(), totalShifts: data.get("totalShifts"), absence: data.get("absence").trim(),
       basic, ratings, strengths: data.get("strengths").trim(), development: data.get("development").trim(),
       fullTime: data.get("fullTime"), potential: data.get("potential"), recommendation: data.get("recommendation"),
       classification: data.get("classification"), motivation: data.get("motivation").trim()
-    });
+    };
+    if (isEditing) {
+      const assessmentIndex = assessments.findIndex(item => item.id === assessment.id);
+      if (assessmentIndex === -1) return;
+      assessments[assessmentIndex] = savedAssessment;
+    } else {
+      assessments.push(savedAssessment);
+    }
     await saveAssessments(assessments);
-    await addAuditEvent("assessment", `${person.name}: bedömning sparad`, data.get("date"));
+    await addAuditEvent("assessment", `${person.name}: bedömning ${isEditing ? "uppdaterad" : "sparad"}`, data.get("date"));
     assessmentFormOpen = false;
+    editingAssessmentId = "";
     await renderAssessments();
   });
   return form;
@@ -2255,6 +2298,7 @@ async function renderAssessments() {
     button.addEventListener("click", async () => {
       selectedAssessmentPersonId = person.id;
       assessmentFormOpen = false;
+      editingAssessmentId = "";
       await renderAssessments();
     });
     peopleList.appendChild(button);
@@ -2267,10 +2311,12 @@ async function renderAssessments() {
   if (!selectedPerson) {
     content.innerHTML = "<div class=\"assessment-empty-state\"><strong>Välj en medarbetare</strong><p>Personens bedömningar visas här.</p></div>";
   } else if (assessmentFormOpen) {
+    const assessmentToEdit = assessments.find(item => item.id === editingAssessmentId && item.personId === selectedPerson.id) || null;
     content.appendChild(createAssessmentForm(selectedPerson, async () => {
       assessmentFormOpen = false;
+      editingAssessmentId = "";
       await renderAssessments();
-    }));
+    }, assessmentToEdit));
   } else {
     const personAssessments = assessments
       .filter(item => item.personId === selectedPerson.id)
@@ -2285,6 +2331,7 @@ async function renderAssessments() {
     addButton.textContent = "+ Ny bedömning";
     addButton.addEventListener("click", async () => {
       assessmentFormOpen = true;
+      editingAssessmentId = "";
       await renderAssessments();
     });
     heading.appendChild(addButton);
@@ -2300,7 +2347,12 @@ async function renderAssessments() {
       const record = renderAssessmentRecord(
         assessment,
         previousAssessment,
-        chronologicalIndex + 1
+        chronologicalIndex + 1,
+        async () => {
+          editingAssessmentId = assessment.id;
+          assessmentFormOpen = true;
+          await renderAssessments();
+        }
       );
       if (displayIndex === 0) record.open = true;
       records.appendChild(record);
@@ -3369,7 +3421,7 @@ async function renderDashboard() {
     </div>
     <div class="dashboard-columns">
       <section class="card data-tools-card"><div><h3>Data och säkerhet</h3><p>Exportera en krypterad säkerhetskopia eller återställ från en tidigare fil.</p></div><div class="data-tool-actions"><button id="exportDataBtn" class="btn primary" type="button">Exportera backup</button><button id="importDataBtn" class="btn" type="button">Importera backup</button><input id="importDataInput" type="file" accept="application/json,.json" hidden></div></section>
-      <section class="card audit-card"><div class="audit-heading"><div><h3>Senaste ändringar</h3><p>De senaste aktiviteterna i systemet</p></div><span>${events.length}</span></div><div class="audit-list">${events.slice(0, 20).map(event => `<article><span class="audit-dot"></span><div><strong>${escapeHtml(event.title)}</strong><p>${escapeHtml(event.detail || "")}</p><small>${new Date(event.createdAt).toLocaleString("sv-SE")}</small></div>${event.undo ? `<button class="audit-undo" data-audit-id="${event.id}" type="button">Återställ</button>` : ""}</article>`).join("") || '<div class="empty-state">Inga ändringar registrerade ännu.</div>'}</div></section>
+      <section class="card audit-card"><div class="audit-heading"><div><h3>Dagens ändringar</h3><p>Aktiviteter som registrerats idag</p></div><span>${events.length}</span></div><div class="audit-list">${events.map(event => `<article><span class="audit-dot"></span><div><strong>${escapeHtml(event.title)}</strong><p>${escapeHtml(event.detail || "")}</p><small>${new Date(event.createdAt).toLocaleString("sv-SE")}</small></div>${event.undo ? `<button class="audit-undo" data-audit-id="${event.id}" type="button">Återställ</button>` : ""}</article>`).join("") || '<div class="empty-state">Inga ändringar registrerade idag.</div>'}</div></section>
     </div>
   `;
   setupDataTools();

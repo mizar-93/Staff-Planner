@@ -3323,6 +3323,12 @@ body.app-authenticated #appShell {
   background: #fbfcfe;
 }
 
+.assessment-record-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
 .assessment-record-content h5 {
   margin: 20px 0 9px;
   font-size: 14px;
