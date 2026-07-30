@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Schema</title>
-  <link rel="stylesheet" href="style.css?v=20260730-12" />
+  <link rel="stylesheet" href="style.css?v=20260730-20" />
 </head>
 <body class="app-booting">
   <div id="authScreen" class="auth-screen">
@@ -55,9 +55,12 @@
               <h2>Schema</h2>
               <p>Veckoplanering för personal</p>
             </div>
-            <button id="autoScheduleBtn" class="btn primary auto-schedule-btn" type="button">
-              Skapa veckoschema
-            </button>
+            <div class="schedule-title-actions">
+              <button id="autoScheduleBtn" class="btn primary auto-schedule-btn" type="button">
+                Skapa veckoschema
+              </button>
+              <button id="shareScheduleBtn" class="btn share-schedule-btn" type="button">Dela med gruppen</button>
+            </div>
           </div>
           <p id="autoScheduleMessage" class="auto-schedule-message" aria-live="polite"></p>
         </div>
@@ -73,6 +76,6 @@
       © 2026 Mizzar — Staff Planner
     </footer>
   </div>
-  <script src="app.js?v=20260730-13"></script>
+  <script src="app.js?v=20260730-20"></script>
 </body>
 </html>

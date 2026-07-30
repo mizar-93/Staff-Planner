@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lägg till</title>
-  <link rel="stylesheet" href="style.css?v=20260729" />
+  <link rel="stylesheet" href="style.css?v=20260730-21" />
 </head>
 <body class="app-booting">
   <div id="authScreen" class="auth-screen">
@@ -70,9 +70,30 @@
 
           <div id="message" class="message hidden">Person tillagd</div>
         </section>
+
+        <section class="card work-item-manager">
+          <div class="work-item-manager-heading">
+            <div><h3>Lägg till avdelning eller maskin</h3><p>Bestäm var den ska visas och placeras i systemet.</p></div>
+          </div>
+          <form id="workItemForm" class="work-item-form">
+            <div class="work-item-fields">
+              <label><span>Namn</span><input id="workItemName" placeholder="Exempel: GD5 eller Ny avdelning" required /></label>
+              <label><span>Placering i schemat</span><select id="workItemAfter"></select><small>Den nya raden placeras direkt efter ditt val.</small></label>
+            </div>
+            <fieldset class="work-item-destinations">
+              <legend>Var ska den visas?</legend>
+              <label><input id="workItemSchema" type="checkbox" checked /><span><strong>Schema</strong><small>Skapa en egen rad i veckoschemat.</small></span></label>
+              <label><input id="workItemCompetency" type="checkbox" checked /><span><strong>Kompetens & test</strong><small>Bedöm behörighet och testresultat.</small></span></label>
+              <label><input id="workItemAutoSchedule" type="checkbox" /><span><strong>Autoschema</strong><small>Bemanna automatiskt med behörig personal.</small></span></label>
+            </fieldset>
+            <div class="work-item-submit"><span>Du kan ta bort egna poster från listan nedan.</span><button class="btn primary" type="submit">+ Lägg till</button></div>
+          </form>
+          <p id="workItemMessage" class="inline-message" aria-live="polite"></p>
+          <div id="workItemList" class="work-item-list"></div>
+        </section>
       </main>
     </div>
   </div>
-  <script src="app.js?v=20260729"></script>
+  <script src="app.js?v=20260730-20"></script>
 </body>
 </html>
