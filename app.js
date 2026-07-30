@@ -9,6 +9,8 @@ const TASKS = [
   "Packa L1",
   "Packa L2/3",
   "Packa L4",
+  "Extra person 1",
+  "Extra person 2",
   "Utbildning 1",
   "Utbildning 2"
 ];
@@ -32,6 +34,11 @@ const BREAK_WORKPLACE_DISPLAY_ORDER = [
   "GD1", "GD2", "GD3", "GD4",
   "Logimark", "ETIKETTO", "miniLogimark",
   "Packa L1", "Packa L2/3", "Packa L4"
+];
+const EXTRA_PERSON_ASSIGNMENTS = [
+  "Lock & dosor",
+  "GD-rummet",
+  "Hjälp till på packavdelningen"
 ];
 
 const BASIC_ASSESSMENT_ITEMS = [
@@ -66,6 +73,7 @@ const STORAGE_KEYS = {
   trainingLeadersWeek: "staff_training_leaders_week",
   trainingLocations: "staff_training_locations_enc",
   trainingLocationsWeek: "staff_training_locations_week",
+  extraPersonLocations: "staff_extra_person_locations_enc",
   breakPlan: "staff_break_plan_enc",
   breakPlanWeek: "staff_break_plan_week",
   schedulePriorityLines: "staff_schedule_priority_lines_enc",
@@ -294,6 +302,7 @@ function clearPersistentData() {
     STORAGE_KEYS.schedule,
     STORAGE_KEYS.trainingLeaders,
     STORAGE_KEYS.trainingLocations,
+    STORAGE_KEYS.extraPersonLocations,
     STORAGE_KEYS.breakPlan,
     STORAGE_KEYS.schedulePriorityLines
   ].map(key => `${key}:`);
@@ -370,6 +379,27 @@ function normalizeTrainingLocations(trainingLocations) {
     });
   });
 
+  return normalized;
+}
+
+function createEmptyExtraPersonLocations() {
+  return Object.fromEntries(
+    TASKS.filter(isExtraPersonTask).map(task => [
+      task,
+      Object.fromEntries(DAYS.map(day => [day, ""]))
+    ])
+  );
+}
+
+function normalizeExtraPersonLocations(locations) {
+  const normalized = createEmptyExtraPersonLocations();
+  Object.keys(normalized).forEach(task => {
+    DAYS.forEach(day => {
+      normalized[task][day] = EXTRA_PERSON_ASSIGNMENTS.includes(locations?.[task]?.[day])
+        ? locations[task][day]
+        : "";
+    });
+  });
   return normalized;
 }
 
@@ -478,7 +508,7 @@ async function createFairWeeklySchedule(priorityLines) {
   }
 
   const schedule = createEmptySchedule();
-  TASKS.filter(task => task.includes("Utbildning")).forEach(task => {
+  TASKS.filter(isTrainingTaskName).forEach(task => {
     DAYS.forEach(day => {
       schedule[task][day] = currentSchedule[task]?.[day] ?? "";
     });
@@ -495,6 +525,11 @@ async function createFairWeeklySchedule(priorityLines) {
       order: index
     }
   ]));
+  const extraStats = Object.fromEntries(availablePeople.map((person, index) => [
+    person.id,
+    { total: 0, order: index }
+  ]));
+  const extraPersonLocations = createEmptyExtraPersonLocations();
   let assignmentCount = 0;
   let unfilledCount = 0;
 
@@ -505,9 +540,13 @@ async function createFairWeeklySchedule(priorityLines) {
       if (personId) {
         assignedToday.add(personId);
         if (stats[personId]) stats[personId].total += 1;
+        if (extraStats[personId]) extraStats[personId].total += 1;
       }
       const leaderId = trainingLeaders?.[task]?.[day];
-      if (leaderId) assignedToday.add(leaderId);
+      if (leaderId) {
+        assignedToday.add(leaderId);
+        if (extraStats[leaderId]) extraStats[leaderId].total += 1;
+      }
     });
 
     const tasksForDay = productionTasks;
@@ -558,6 +597,34 @@ async function createFairWeeklySchedule(priorityLines) {
         (personStats.byDepartment[department] || 0) + 1;
       personStats.lastTask = task;
       personStats.lastDepartment = department;
+      if (extraStats[selectedPerson.id]) extraStats[selectedPerson.id].total += 1;
+      assignmentCount += 1;
+    });
+
+    [
+      { task: "Extra person 1", assignment: "GD-rummet" },
+      { task: "Extra person 2", assignment: "Lock & dosor" }
+    ].forEach(({ task, assignment }, extraIndex) => {
+      const selectedPerson = availablePeople
+        .filter(person => {
+          if (assignedToday.has(person.id)) return false;
+          const personRestrictions = Array.isArray(restrictions[person.id])
+            ? restrictions[person.id]
+            : [];
+          return assignment !== "GD-rummet" || !personRestrictions.includes("GD");
+        })
+        .sort((first, second) => {
+          const firstStats = extraStats[first.id];
+          const secondStats = extraStats[second.id];
+          return firstStats.total - secondStats.total ||
+            ((firstStats.order - dayIndex - extraIndex + availablePeople.length * 3) % availablePeople.length) -
+            ((secondStats.order - dayIndex - extraIndex + availablePeople.length * 3) % availablePeople.length);
+        })[0];
+      if (!selectedPerson) return;
+      schedule[task][day] = selectedPerson.id;
+      extraPersonLocations[task][day] = assignment;
+      assignedToday.add(selectedPerson.id);
+      extraStats[selectedPerson.id].total += 1;
       assignmentCount += 1;
     });
   });
@@ -566,6 +633,7 @@ async function createFairWeeklySchedule(priorityLines) {
     ok: true,
     schedule,
     trainingLocations,
+    extraPersonLocations,
     assignmentCount,
     unfilledCount,
     message: unfilledCount
@@ -587,6 +655,10 @@ function showSchedulePreview(result, people) {
         const trainingTask = TASKS.filter(item => item.includes("Utbildning"))
           .find(item => result.schedule?.[item]?.[day] && result.trainingLocations?.[item]?.[day] === task);
         const value = trainingTask ? "Utbildning" : nameById[result.schedule[task]?.[day]] || "—";
+        if (isExtraPersonTask(task) && value !== "—") {
+          const assignment = result.extraPersonLocations?.[task]?.[day] || "Ingen uppgift vald";
+          return `<div class="preview-extra-person"><strong>${escapeHtml(value)}</strong><small>${escapeHtml(assignment)}</small></div>`;
+        }
         return `<div${trainingTask ? ' class="preview-training"' : ""}>${escapeHtml(value)}</div>`;
       }).join("")}
     `).join("");
@@ -637,7 +709,10 @@ function setupAutoSchedule() {
           if (message) message.textContent = "Förhandsvisningen stängdes utan att schemat ändrades.";
           return;
         }
-        await saveSchedule(result.schedule);
+        await Promise.all([
+          saveSchedule(result.schedule),
+          saveExtraPersonLocations(result.extraPersonLocations)
+        ]);
         await addAuditEvent("schedule", "Veckoschema skapat", `${result.assignmentCount} placeringar för ${formatWeekRange()}`);
         await renderSchedule();
         await renderBreakPlanner();
@@ -1048,12 +1123,25 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
   summary.append(heading, list);
 }
 
+function isExtraPersonTask(task) {
+  return task === "Extra person 1" || task === "Extra person 2";
+}
+
+function isTrainingTaskName(task) {
+  return task.includes("Utbildning");
+}
+
+function getProductionWorkplaces() {
+  return TASKS.filter(task => !isTrainingTaskName(task) && !isExtraPersonTask(task));
+}
+
 function cleanupOldWeeklyData() {
   const oldestWeekToKeep = formatDateKey(getPreviousWeekStart());
   const weeklyPrefixes = [
     STORAGE_KEYS.schedule,
     STORAGE_KEYS.trainingLeaders,
     STORAGE_KEYS.trainingLocations,
+    STORAGE_KEYS.extraPersonLocations,
     STORAGE_KEYS.breakPlan,
     STORAGE_KEYS.schedulePriorityLines
   ].map(key => `${key}:`);
@@ -1346,6 +1434,24 @@ async function saveTrainingLocations(trainingLocations) {
   localStorage.setItem(STORAGE_KEYS.trainingLocationsWeek, getSelectedWeekKey());
 }
 
+async function getExtraPersonLocations() {
+  if (!appUnlocked || !sessionKey) return createEmptyExtraPersonLocations();
+  const locations = await decryptStoredItem(
+    getWeekStorageKey(STORAGE_KEYS.extraPersonLocations),
+    createEmptyExtraPersonLocations()
+  );
+  return locations === null
+    ? createEmptyExtraPersonLocations()
+    : normalizeExtraPersonLocations(locations);
+}
+
+async function saveExtraPersonLocations(locations) {
+  await encryptStoredItem(
+    getWeekStorageKey(STORAGE_KEYS.extraPersonLocations),
+    normalizeExtraPersonLocations(locations)
+  );
+}
+
 async function getBreakPlan() {
   if (!appUnlocked || !sessionKey) return createEmptyBreakPlan();
 
@@ -1549,7 +1655,7 @@ function getScheduledPeopleForDay(schedule, people, day) {
 
 function getScheduledWorkplaceByPerson(schedule, day) {
   const workplaces = {};
-  TASKS.filter(task => !task.includes("Utbildning")).forEach(task => {
+  getProductionWorkplaces().forEach(task => {
     const personId = schedule?.[task]?.[day];
     if (personId && !workplaces[personId]) workplaces[personId] = task;
   });
@@ -1891,7 +1997,7 @@ async function renderBreakPlanner() {
       ? "<option value=\"\">Välj maskin / avdelning</option>"
       : "<option value=\"\">Välj grupp först</option>";
     workplaceSelect.disabled = selectedGroup !== 1 && selectedGroup !== 2;
-    TASKS.filter(task => !task.includes("Utbildning")).forEach(task => {
+    getProductionWorkplaces().forEach(task => {
       if (usedWorkplaces.has(task) && dayPlan.workplaces[person.id] !== task) return;
 
       const option = document.createElement("option");
@@ -2508,12 +2614,13 @@ async function renderSchedule() {
   const root = document.getElementById("scheduleGrid");
   if (!root) return;
 
-  const [people, schedule, trainingLeaders, trainingLocations, skills, restrictions] =
+  const [people, schedule, trainingLeaders, trainingLocations, extraPersonLocations, skills, restrictions] =
     await Promise.all([
       getPeople(),
       getSchedule(),
       getTrainingLeaders(),
       getTrainingLocations(),
+      getExtraPersonLocations(),
       getMachineSkills(),
       getMachineRestrictions()
     ]);
@@ -2538,6 +2645,7 @@ async function renderSchedule() {
 
   TASKS.forEach(task => {
     const isTrainingTask = task.includes("Utbildning");
+    const isExtraTask = isExtraPersonTask(task);
     const trainingVariantClass = task === "Utbildning 1"
       ? "utbildning-1"
       : task === "Utbildning 2"
@@ -2545,7 +2653,7 @@ async function renderSchedule() {
         : "";
     const taskClassName = isTrainingTask
       ? `task utbildning ${trainingVariantClass}`
-      : "task";
+      : isExtraTask ? "task extra-person-task" : "task";
 
     root.appendChild(makeCell(task, taskClassName));
 
@@ -2566,7 +2674,7 @@ async function renderSchedule() {
 
       cell.className = isTrainingTask
         ? `cell utbildning ${trainingVariantClass}`
-        : "cell";
+        : isExtraTask ? "cell extra-person-cell" : "cell";
       select.className = "schedule-select";
 
       if (isTrainingTask) {
@@ -2600,8 +2708,14 @@ async function renderSchedule() {
 
         const availability = getPersonAvailability(person);
         if (availability !== "available") return;
+        if (
+          isExtraTask &&
+          extraPersonLocations[task]?.[day] === "GD-rummet" &&
+          Array.isArray(restrictions[person.id]) &&
+          restrictions[person.id].includes("GD")
+        ) return;
         let eligibilityLabel = "";
-        if (!isTrainingTask) {
+        if (!isTrainingTask && !isExtraTask) {
           const department = getTaskDepartment(task);
           const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
           const personRestrictions = Array.isArray(restrictions[person.id])
@@ -2676,6 +2790,11 @@ async function renderSchedule() {
           await saveTrainingLocations(trainingLocations);
         }
 
+        if (isExtraTask && !selectedId && extraPersonLocations[task]?.[day]) {
+          extraPersonLocations[task][day] = "";
+          await saveExtraPersonLocations(extraPersonLocations);
+        }
+
         await saveSchedule(schedule);
         await addAuditEvent("schedule", `${task} · ${day}`, selectedPerson ? `${selectedPerson.name} schemalagd` : "Placering rensad");
         await renderSchedule();
@@ -2687,8 +2806,48 @@ async function renderSchedule() {
         personLabel.className = "training-field-label";
         personLabel.innerHTML = "<span>1</span> Person";
         cell.append(personLabel, select);
+      } else if (isExtraTask) {
+        const personLabel = document.createElement("label");
+        personLabel.className = "training-field-label";
+        personLabel.innerHTML = "<span>1</span> Person";
+        cell.append(personLabel, select);
       } else {
         cell.appendChild(select);
+      }
+
+      if (isExtraTask) {
+        const locationLabel = document.createElement("label");
+        const locationSelect = document.createElement("select");
+        const emptyLocationOption = document.createElement("option");
+        locationLabel.className = "training-field-label";
+        locationLabel.innerHTML = "<span>2</span> Uppgift";
+        locationSelect.className = "schedule-select extra-person-location-select";
+        locationSelect.disabled = !selectedPersonId;
+        emptyLocationOption.value = "";
+        emptyLocationOption.textContent = "Välj uppgift";
+        locationSelect.appendChild(emptyLocationOption);
+        EXTRA_PERSON_ASSIGNMENTS.forEach(location => {
+          const option = document.createElement("option");
+          option.value = location;
+          option.textContent = location;
+          option.selected = extraPersonLocations[task]?.[day] === location;
+          locationSelect.appendChild(option);
+        });
+        locationSelect.addEventListener("change", async () => {
+          const selectedRestrictions = Array.isArray(restrictions[selectedPersonId])
+            ? restrictions[selectedPersonId]
+            : [];
+          if (locationSelect.value === "GD-rummet" && selectedRestrictions.includes("GD")) {
+            alert("Den valda personen får inte arbeta på GD och kan därför inte placeras i GD-rummet.");
+            locationSelect.value = extraPersonLocations[task]?.[day] || "";
+            return;
+          }
+          extraPersonLocations[task] ??= {};
+          extraPersonLocations[task][day] = locationSelect.value;
+          await saveExtraPersonLocations(extraPersonLocations);
+          await addAuditEvent("schedule", `${task} · ${day}`, locationSelect.value ? `Uppgift: ${locationSelect.value}` : "Uppgift rensad");
+        });
+        cell.append(locationLabel, locationSelect);
       }
 
       if (isTrainingTask) {
@@ -2767,7 +2926,7 @@ async function renderSchedule() {
         emptyLocationOption.textContent = "Välj plats";
         locationSelect.appendChild(emptyLocationOption);
 
-        TASKS.filter(location => !location.includes("Utbildning")).forEach(location => {
+        getProductionWorkplaces().forEach(location => {
           const option = document.createElement("option");
           const occupiedBy = schedule?.[location]?.[day];
           const reservedByOtherTraining = TASKS.filter(item => item.includes("Utbildning") && item !== task)

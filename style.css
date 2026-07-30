@@ -901,6 +901,48 @@ input:focus {
   opacity: 1;
 }
 
+.cell.task.extra-person-task {
+  border-left: 4px solid #22a06b;
+  background: #effaf4 !important;
+  color: #187347;
+}
+
+.extra-person-cell {
+  min-width: 0;
+  padding: 6px;
+  background: #f5fcf8 !important;
+}
+
+.extra-person-cell .training-field-label {
+  gap: 4px;
+  margin: 4px 0 2px;
+  font-size: 9px;
+  line-height: 1.1;
+}
+
+.extra-person-cell .training-field-label:first-child {
+  margin-top: 0;
+}
+
+.extra-person-cell .training-field-label span {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: #dff5e9;
+  color: #187347;
+  font-size: 8px;
+}
+
+.extra-person-cell .schedule-select {
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 5px;
+  border-color: #cde8d9;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 10px;
+}
+
 .btn {
   min-height: 42px;
   border-radius: 11px;
@@ -1239,6 +1281,9 @@ input:focus {
 .preview-close { width: 36px; height: 36px; border: 0; border-radius: 10px; background: #eef2f7; font-size: 22px; cursor: pointer; }
 .schedule-preview-grid { display: grid; grid-template-columns: 130px repeat(5,minmax(110px,1fr)); min-width: 760px; padding: 14px 20px; }.schedule-preview-grid > div { padding: 8px; border-right: 1px solid #e8edf3; border-bottom: 1px solid #e8edf3; font-size: 11px; }.preview-header,.preview-task { background: #f7f9fc; font-weight: 800; }.preview-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 15px 20px; border-top: 1px solid var(--border); }
 .schedule-preview-grid .preview-training { background: #eeeaff; color: #4f3b9b; font-weight: 850; }
+.schedule-preview-grid .preview-extra-person { display: grid; gap: 3px; background: #effaf4; color: #187347; }
+.schedule-preview-grid .preview-extra-person strong { font-size: 11px; }
+.schedule-preview-grid .preview-extra-person small { color: #438565; font-size: 9px; font-weight: 800; }
 .machine-skill-grid { align-items: start; }.machine-skill-item { min-width: 0; }.machine-detail-panel { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; margin-top: 6px; padding: 9px; border: 1px solid #dce5ef; border-radius: 11px; background: #f8fafc; }.machine-detail-panel label { display: grid; gap: 3px; color: #66758b; font-size: 9px; font-weight: 800; }.machine-detail-panel input,.machine-detail-panel select { width: 100%; min-width: 0; min-height: 32px; margin: 0; padding: 5px 7px; border-radius: 7px; font-size: 11px; }.skill-notes-label { grid-column: 1 / -1; }
 
 /* Kompetensöversikt */
