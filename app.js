@@ -68,6 +68,7 @@ const STORAGE_KEYS = {
   trainingLocationsWeek: "staff_training_locations_week",
   breakPlan: "staff_break_plan_enc",
   breakPlanWeek: "staff_break_plan_week",
+  schedulePriorityLines: "staff_schedule_priority_lines_enc",
   assessments: "staff_assessments_enc",
   departments: "staff_departments_enc",
   testResults: "staff_test_results_enc",
@@ -150,13 +151,29 @@ function getActualStartOfWeek() {
   return monday;
 }
 
+function getPreviousWeekStart() {
+  const previous = getActualStartOfWeek();
+  previous.setDate(previous.getDate() - 7);
+  return previous;
+}
+
+function isViewingCurrentWeek() {
+  return getSelectedWeekKey() === formatDateKey(getActualStartOfWeek());
+}
+
+function isViewingPreviousWeek() {
+  return getSelectedWeekKey() === formatDateKey(getPreviousWeekStart());
+}
+
 function getStartOfWeek() {
   const stored = sessionStorage.getItem(SELECTED_WEEK_KEY);
   if (stored && /^\d{4}-\d{2}-\d{2}$/.test(stored)) {
     const [year, month, day] = stored.split("-").map(Number);
     const selected = new Date(year, month - 1, day);
     selected.setHours(0, 0, 0, 0);
-    if (!Number.isNaN(selected.getTime())) return selected;
+    const selectedKey = formatDateKey(selected);
+    const previousKey = formatDateKey(getPreviousWeekStart());
+    if (!Number.isNaN(selected.getTime()) && selectedKey >= previousKey) return selected;
   }
 
   return getActualStartOfWeek();
@@ -191,7 +208,10 @@ function formatWeekRange() {
 async function changeSelectedWeek(dayOffset) {
   const selected = getStartOfWeek();
   selected.setDate(selected.getDate() + dayOffset);
-  sessionStorage.setItem(SELECTED_WEEK_KEY, formatDateKey(selected));
+  const selectedKey = formatDateKey(selected);
+  const previousKey = formatDateKey(getPreviousWeekStart());
+  if (selectedKey < previousKey) return;
+  sessionStorage.setItem(SELECTED_WEEK_KEY, selectedKey);
   renderWeekNavigation();
   await renderSchedule();
   await renderBreakPlanner();
@@ -220,7 +240,11 @@ function renderWeekNavigation() {
   current.textContent = "Denna vecka";
   next.textContent = "Nästa →";
   range.className = "week-range";
-  range.innerHTML = `<span>Vald vecka</span><strong>${formatWeekRange()}</strong>`;
+  const viewingCurrentWeek = isViewingCurrentWeek();
+  const viewingPreviousWeek = isViewingPreviousWeek();
+  range.innerHTML = `<span>${viewingCurrentWeek ? "Denna vecka" : viewingPreviousWeek ? "Förra veckan" : "Kommande vecka"}</span><strong>${formatWeekRange()}</strong>`;
+  previous.disabled = viewingPreviousWeek;
+  next.disabled = false;
   previous.addEventListener("click", () => changeSelectedWeek(-7));
   current.addEventListener("click", async () => {
     sessionStorage.setItem(SELECTED_WEEK_KEY, formatDateKey(getActualStartOfWeek()));
@@ -270,7 +294,8 @@ function clearPersistentData() {
     STORAGE_KEYS.schedule,
     STORAGE_KEYS.trainingLeaders,
     STORAGE_KEYS.trainingLocations,
-    STORAGE_KEYS.breakPlan
+    STORAGE_KEYS.breakPlan,
+    STORAGE_KEYS.schedulePriorityLines
   ].map(key => `${key}:`);
 
   Object.keys(localStorage).forEach(key => {
@@ -424,7 +449,7 @@ function getTaskDepartment(task) {
   return "";
 }
 
-async function createFairWeeklySchedule() {
+async function createFairWeeklySchedule(priorityLines) {
   const [people, skills, restrictions, currentSchedule, trainingLeaders, trainingLocations] = await Promise.all([
     getPeople(),
     getMachineSkills(),
@@ -436,7 +461,10 @@ async function createFairWeeklySchedule() {
   const availablePeople = people.filter(
     person => getPersonAvailability(person) === "available"
   );
-  const productionTasks = TASKS.filter(task => !task.includes("Utbildning"));
+  const productionTasks = getRequiredBreakWorkplaces(priorityLines);
+  if (!productionTasks.length) {
+    return { ok: false, message: "Välj minst en linje som ska köras först." };
+  }
   const eligiblePeople = availablePeople.filter(person => {
     const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
     return personSkills.some(skill => ["GD", "ETIKETTO", "Logimark", "Packa"].includes(skill));
@@ -482,11 +510,7 @@ async function createFairWeeklySchedule() {
       if (leaderId) assignedToday.add(leaderId);
     });
 
-    const taskOffset = dayIndex % productionTasks.length;
-    const tasksForDay = [
-      ...productionTasks.slice(taskOffset),
-      ...productionTasks.slice(0, taskOffset)
-    ];
+    const tasksForDay = productionTasks;
 
     tasksForDay.forEach((task, taskIndex) => {
       const reservedForTraining = TASKS.filter(item => item.includes("Utbildning"))
@@ -601,7 +625,8 @@ function setupAutoSchedule() {
     }
 
     try {
-      const result = await createFairWeeklySchedule();
+      const priorityLines = await getSchedulePriorityLines();
+      const result = await createFairWeeklySchedule(priorityLines);
       if (message) {
         message.textContent = result.message;
         message.className = `auto-schedule-message ${result.ok ? "success" : "error"}`;
@@ -978,6 +1003,12 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
     summary?.remove();
     return;
   }
+  const groupedEntries = [...entries.reduce((groups, entry) => {
+    const group = groups.get(entry.person.id) || { person: entry.person, sessions: [] };
+    group.sessions.push(entry);
+    groups.set(entry.person.id, group);
+    return groups;
+  }, new Map()).values()];
 
   if (!summary) {
     summary = document.createElement("section");
@@ -988,27 +1019,98 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
 
   const heading = document.createElement("div");
   heading.className = "training-schedule-heading";
-  heading.innerHTML = `<div><strong>Utbildning denna vecka</strong><span>Planerade personer och utbildningsplatser</span></div><b>${entries.length}</b>`;
+  heading.innerHTML = `<div><strong>Utbildning denna vecka</strong><span>Personer och planerade utbildningsdagar</span></div><b>${groupedEntries.length}</b>`;
   const list = document.createElement("div");
   list.className = "training-schedule-list";
 
-  entries.forEach(({ person, day, task, location }) => {
+  groupedEntries.forEach(({ person, sessions }) => {
     const item = document.createElement("div");
     const info = document.createElement("div");
     const dayLabel = document.createElement("small");
     const name = document.createElement("strong");
     const locationLabel = document.createElement("span");
+    const uniqueDays = [...new Set(sessions.map(session => session.day))];
+    const uniqueLocations = [...new Set(sessions.map(session => session.location))];
+    const dayText = uniqueDays.map(day => day.slice(0, 3)).join(" · ");
+    const locationText = uniqueLocations.length === 1
+      ? `Utbildning · ${uniqueLocations[0]}`
+      : sessions.map(session => `${session.day.slice(0, 3)}: ${session.location}`).join(" · ");
     item.className = "training-schedule-person";
-    item.title = `${person.name} har ${task.toLowerCase()} på ${location} (${day})`;
-    dayLabel.textContent = day;
-    name.textContent = person.name;
-    locationLabel.textContent = `Utbildning · ${location}`;
+    item.title = `${person.name} har utbildning ${uniqueDays.join(", ")}`;
+    dayLabel.textContent = person.name;
+    name.textContent = dayText;
+    locationLabel.textContent = locationText;
     info.append(name, locationLabel);
     item.append(dayLabel, info);
     list.appendChild(item);
   });
 
   summary.append(heading, list);
+}
+
+function cleanupOldWeeklyData() {
+  const oldestWeekToKeep = formatDateKey(getPreviousWeekStart());
+  const weeklyPrefixes = [
+    STORAGE_KEYS.schedule,
+    STORAGE_KEYS.trainingLeaders,
+    STORAGE_KEYS.trainingLocations,
+    STORAGE_KEYS.breakPlan,
+    STORAGE_KEYS.schedulePriorityLines
+  ].map(key => `${key}:`);
+
+  Object.keys(localStorage).forEach(key => {
+    const prefix = weeklyPrefixes.find(item => key.startsWith(item));
+    if (!prefix) return;
+    const weekKey = key.slice(prefix.length);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(weekKey) && weekKey < oldestWeekToKeep) {
+      localStorage.removeItem(key);
+    }
+  });
+}
+
+async function renderSchedulePrioritySelector(scheduleRoot) {
+  const card = scheduleRoot.parentElement;
+  if (!card) return;
+  const selectedLines = await getSchedulePriorityLines();
+  const isEditableWeek = !isViewingPreviousWeek();
+  const autoScheduleButton = document.getElementById("autoScheduleBtn");
+  if (autoScheduleButton) {
+    autoScheduleButton.disabled = !isEditableWeek || selectedLines.length === 0;
+    autoScheduleButton.title = !isEditableWeek
+      ? "Förra veckans schema är skrivskyddat"
+      : selectedLines.length ? "" : "Välj minst en linje först";
+  }
+  let panel = card.querySelector(".schedule-priority-panel");
+  if (!panel) {
+    panel = document.createElement("section");
+    panel.className = "schedule-priority-panel";
+    card.insertBefore(panel, scheduleRoot);
+  }
+  panel.innerHTML = `
+    <div class="schedule-priority-heading">
+      <div><strong>Vilka linjer ska köras?</strong><small>Välj linjer innan du skapar veckoschemat. Kopplade stationer tas med automatiskt.</small></div>
+      <span>${selectedLines.length} valda</span>
+    </div>
+    <div class="break-priority-options">
+      ${Object.entries(BREAK_LINE_LABELS).map(([line, label]) => `
+        <label class="break-priority-option">
+          <input type="checkbox" value="${line}"${selectedLines.includes(line) ? " checked" : ""} />
+          <span>${escapeHtml(label)}</span>
+        </label>
+      `).join("")}
+    </div>
+  `;
+  panel.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+    checkbox.disabled = !isEditableWeek;
+    checkbox.addEventListener("change", async () => {
+      const currentLines = await getSchedulePriorityLines();
+      const nextLines = checkbox.checked
+        ? [...new Set([...currentLines, checkbox.value])]
+        : currentLines.filter(line => line !== checkbox.value);
+      await saveSchedulePriorityLines(nextLines);
+      await renderSchedulePrioritySelector(scheduleRoot);
+    });
+  });
 }
 
 async function getAssessments() {
@@ -1266,6 +1368,24 @@ async function getBreakPlan() {
 async function saveBreakPlan(breakPlan) {
   await encryptStoredItem(getWeekStorageKey(STORAGE_KEYS.breakPlan), normalizeBreakPlan(breakPlan));
   localStorage.setItem(STORAGE_KEYS.breakPlanWeek, getSelectedWeekKey());
+}
+
+async function getSchedulePriorityLines() {
+  if (!appUnlocked || !sessionKey) return [];
+  const lines = await decryptStoredItem(
+    getWeekStorageKey(STORAGE_KEYS.schedulePriorityLines),
+    []
+  );
+  return Array.isArray(lines)
+    ? lines.filter(line => Object.hasOwn(BREAK_LINE_WORKPLACES, line))
+    : [];
+}
+
+async function saveSchedulePriorityLines(lines) {
+  const normalized = Array.isArray(lines)
+    ? lines.filter(line => Object.hasOwn(BREAK_LINE_WORKPLACES, line))
+    : [];
+  await encryptStoredItem(getWeekStorageKey(STORAGE_KEYS.schedulePriorityLines), normalized);
 }
 
 async function getTodos() {
@@ -2401,6 +2521,7 @@ async function renderSchedule() {
 
   renderAvailabilitySummary(root, people);
   renderTrainingScheduleSummary(root, people, schedule, trainingLocations);
+  await renderSchedulePrioritySelector(root);
   root.innerHTML = "";
   root.appendChild(makeCell("Uppgift", "header task"));
 
@@ -2687,6 +2808,20 @@ async function renderSchedule() {
       root.appendChild(cell);
     });
   });
+
+  const card = root.parentElement;
+  let historyNotice = card?.querySelector(".schedule-history-notice");
+  if (isViewingPreviousWeek()) {
+    root.querySelectorAll("select").forEach(select => { select.disabled = true; });
+    if (!historyNotice && card) {
+      historyNotice = document.createElement("div");
+      historyNotice.className = "schedule-history-notice";
+      card.insertBefore(historyNotice, root);
+    }
+    if (historyNotice) historyNotice.textContent = "Visar förra veckans schema · Endast läsning";
+  } else {
+    historyNotice?.remove();
+  }
 }
 
 async function renderPeople() {
@@ -3347,7 +3482,7 @@ async function renderProduction() {
     <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn primary" type="button">Spara dagen</button></div>
     <div class="production-kpis"><article id="productionTotalCard" class="${total >= target ? "goal-card-met" : "goal-card-missed"}"><span>Dagens produktion</span><strong id="productionTotal">${total}</strong><small>box totalt</small></article><article><span>Dagligt mål</span><strong id="productionGoalValue">${target}</strong><small>box</small></article><article class="factory-record-card"><span>Fabriksrekord</span><strong id="factoryRecordValue">${settings.factoryRecord}</strong><small>officiellt rekord · uppdateras vid nytt rekord</small><button id="editFactoryRecordBtn" type="button">Ändra manuellt</button></article></div>
     <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${machine.replace("GD", "GD-")}</strong><label>Operatör<select data-machine="${machine}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Resultat (BOX)<input data-machine="${machine}" data-field="result" class="production-result" type="number" min="0" value="${item.result ?? ""}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${machine}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
-    <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Öppna en tidigare dag för att visa eller ändra resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<button type="button" data-production-date="${item.date}" class="${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
+    <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Klicka på en dag för att visa eller ta bort resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<div class="production-history-item"><button type="button" data-production-menu="${item.date}" class="production-history-trigger ${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button><div class="production-history-menu" data-production-actions="${item.date}" hidden><button type="button" data-production-view="${item.date}">Visa</button><button type="button" class="danger" data-production-delete="${item.date}">Ta bort</button></div></div>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
   `;
   const updateSummary = () => {
     const currentTotal = [...root.querySelectorAll(".production-result")].reduce((sum, input) => sum + (Number(input.value) || 0), 0);
@@ -3393,7 +3528,33 @@ async function renderProduction() {
     await renderProduction();
     await renderDashboard();
   });
-  root.querySelectorAll("[data-production-date]").forEach(button => button.addEventListener("click", () => { selectedProductionDate = button.dataset.productionDate; void renderProduction(); }));
+  root.querySelectorAll("[data-production-menu]").forEach(button => button.addEventListener("click", event => {
+    event.stopPropagation();
+    const menu = root.querySelector(`[data-production-actions="${button.dataset.productionMenu}"]`);
+    root.querySelectorAll(".production-history-menu").forEach(item => {
+      if (item !== menu) item.hidden = true;
+    });
+    if (menu) menu.hidden = !menu.hidden;
+  }));
+  root.querySelectorAll("[data-production-view]").forEach(button => button.addEventListener("click", () => {
+    selectedProductionDate = button.dataset.productionView;
+    void renderProduction();
+  }));
+  root.querySelectorAll("[data-production-delete]").forEach(button => button.addEventListener("click", async () => {
+    const date = button.dataset.productionDelete;
+    const displayDate = new Date(date + "T12:00:00").toLocaleDateString("sv-SE");
+    if (!confirm(`Vill du ta bort produktionsresultatet för ${displayDate}?`)) return;
+    delete records[date];
+    await saveProductionRecords(records);
+    await addAuditEvent("production", `Produktion ${date} borttagen`, "Resultatet raderades från historiken");
+    await renderProduction();
+    await renderDashboard();
+  }));
+  root.addEventListener("click", event => {
+    if (!event.target.closest(".production-history-item")) {
+      root.querySelectorAll(".production-history-menu").forEach(menu => { menu.hidden = true; });
+    }
+  });
 }
 
 async function renderDashboard() {
@@ -3404,6 +3565,7 @@ async function renderDashboard() {
   ]);
   const sick = people.filter(person => getPersonAvailability(person) === "sick").length;
   const vacation = people.filter(person => getPersonAvailability(person) === "vacation").length;
+  const available = people.filter(person => getPersonAvailability(person) === "available").length;
   const fullyQualified = people.filter(person => {
     const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
     return departments.length > 0 && departments.every(item => personSkills.includes(item));
@@ -3413,6 +3575,7 @@ async function renderDashboard() {
   root.innerHTML = `
     <div class="dashboard-stats">
       <article><span>Personal</span><strong>${people.length}</strong><small>registrerade</small></article>
+      <article class="stat-green"><span>Tillgängliga i gruppen</span><strong>${available}</strong><small>kan schemaläggas</small></article>
       <article class="stat-red"><span>Sjuka</span><strong>${sick}</strong><small>ej tillgängliga</small></article>
       <article class="stat-yellow"><span>Semester</span><strong>${vacation}</strong><small>frånvarande</small></article>
       <article class="stat-green"><span>Full kompetens</span><strong>${fullyQualified}</strong><small>alla maskiner</small></article>
@@ -3708,6 +3871,7 @@ function setupAddForm() {
 }
 
 function initializeAppContent() {
+  cleanupOldWeeklyData();
   enhanceAppShell();
   if (document.getElementById("breakPlanner")) {
     resetBreakPlannerToToday();
