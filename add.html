@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lägg till</title>
-  <link rel="stylesheet" href="style.css?v=20260730-21" />
+  <link rel="stylesheet" href="style.css?v=20260731-3" />
 </head>
 <body class="app-booting">
   <div id="authScreen" class="auth-screen">
@@ -77,8 +77,11 @@
           </div>
           <form id="workItemForm" class="work-item-form">
             <div class="work-item-fields">
-              <label><span>Namn</span><input id="workItemName" placeholder="Exempel: GD5 eller Ny avdelning" required /></label>
+              <label><span>Namn</span><input id="workItemName" placeholder="Exempel: GD5 eller Ny avdelning" required /><small aria-hidden="true">&nbsp;</small></label>
               <label><span>Placering i schemat</span><select id="workItemAfter"></select><small>Den nya raden placeras direkt efter ditt val.</small></label>
+              <label><span>Typ</span><select id="workItemType"><option value="machine">Maskin</option><option value="department">Avdelning</option><option value="training">Utbildning</option><option value="extra">Extra person</option></select><small>Styr hur posten används i systemet.</small></label>
+              <label><span>Antal personer</span><input id="workItemStaffCount" type="number" min="1" max="20" value="1" /><small>Minsta bemanning som behövs.</small></label>
+              <label class="work-item-skills-field"><span>Kompetenser som krävs</span><input id="workItemRequiredSkills" placeholder="Exempel: GD, Truckkort" /><small>Separera flera kompetenser med kommatecken.</small></label>
             </div>
             <fieldset class="work-item-destinations">
               <legend>Var ska den visas?</legend>
@@ -86,14 +89,15 @@
               <label><input id="workItemCompetency" type="checkbox" checked /><span><strong>Kompetens & test</strong><small>Bedöm behörighet och testresultat.</small></span></label>
               <label><input id="workItemAutoSchedule" type="checkbox" /><span><strong>Autoschema</strong><small>Bemanna automatiskt med behörig personal.</small></span></label>
             </fieldset>
-            <div class="work-item-submit"><span>Du kan ta bort egna poster från listan nedan.</span><button class="btn primary" type="submit">+ Lägg till</button></div>
+            <div class="work-item-submit"><span>Poster kan redigeras, pausas och ordnas utan att data försvinner.</span><div class="work-item-form-actions"><button id="cancelWorkItemEdit" class="btn hidden" type="button">Avbryt</button><button id="saveWorkItemBtn" class="btn primary" type="submit">+ Lägg till</button></div></div>
           </form>
           <p id="workItemMessage" class="inline-message" aria-live="polite"></p>
           <div id="workItemList" class="work-item-list"></div>
+          <details class="work-item-trash"><summary>Papperskorg <span id="workItemTrashCount">0</span></summary><div id="workItemTrashList" class="work-item-list"></div></details>
         </section>
       </main>
     </div>
   </div>
-  <script src="app.js?v=20260730-20"></script>
+  <script src="app.js?v=20260731-3"></script>
 </body>
 </html>

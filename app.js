@@ -17,27 +17,28 @@ const DEFAULT_TASKS = [
 let TASKS = [...DEFAULT_TASKS];
 let customWorkItems = [];
 
-const DAYS = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"];
+const ALL_DAYS = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"];
+let DAYS = [...ALL_DAYS];
 const DEFAULT_PEOPLE = [];
 const DEFAULT_DEPARTMENTS = ["GD", "ETIKETTO", "Logimark", "Packa"];
-const BREAK_LINE_WORKPLACES = {
+let BREAK_LINE_WORKPLACES = {
   GD1: ["GD1", "ETIKETTO", "Packa L1"],
   GD2: ["GD2", "Logimark", "Packa L2/3"],
   GD3: ["GD3", "Logimark", "Packa L2/3"],
   GD4: ["GD4", "miniLogimark", "Packa L4"]
 };
-const BREAK_LINE_LABELS = {
+let BREAK_LINE_LABELS = {
   GD1: "Linje 1",
   GD2: "Linje 2",
   GD3: "Linje 3",
   GD4: "Linje 4"
 };
-const BREAK_WORKPLACE_DISPLAY_ORDER = [
+let BREAK_WORKPLACE_DISPLAY_ORDER = [
   "GD1", "GD2", "GD3", "GD4",
   "Logimark", "ETIKETTO", "miniLogimark",
   "Packa L1", "Packa L2/3", "Packa L4"
 ];
-const EXTRA_PERSON_ASSIGNMENTS = [
+let EXTRA_PERSON_ASSIGNMENTS = [
   "Lock & dosor",
   "GD-rummet",
   "Hjälp till på packavdelningen"
@@ -71,6 +72,7 @@ const STORAGE_KEYS = {
   peopleYear: "staff_people_year",
   schedule: "staff_schedule_enc",
   scheduleWeek: "staff_schedule_week",
+  scheduleUpdatedAt: "staff_schedule_updated_at",
   trainingLeaders: "staff_training_leaders_enc",
   trainingLeadersWeek: "staff_training_leaders_week",
   trainingLocations: "staff_training_locations_enc",
@@ -91,11 +93,34 @@ const STORAGE_KEYS = {
   productionSettings: "staff_production_settings_enc",
   todos: "staff_todos_enc",
   workItems: "staff_work_items_enc",
+  workItemTrash: "staff_work_item_trash_enc",
+  safetySnapshots: "staff_safety_snapshots_enc",
+  automaticBackups: "staff_automatic_backups_enc",
+  scheduleTemplates: "staff_schedule_templates_enc",
+  dataSchemaVersion: "staff_data_schema_version",
+  appSettings: "staff_app_settings_enc",
   legacyPeople: "staff_people",
   legacySchedule: "staff_schedule"
 };
 
 const SELECTED_WEEK_KEY = "staff_selected_week";
+const DEFAULT_APP_SETTINGS = {
+  workDays: [...ALL_DAYS],
+  autoLockMinutes: 30,
+  onboardingComplete: false,
+  showTips: true,
+  organizationName: "",
+  feedbackEmail: "",
+  productionMachines: ["GD1", "GD2", "GD3", "GD4"],
+  extraAssignments: ["Lock & dosor", "GD-rummet", "Hjälp till på packavdelningen"],
+  breakLines: [
+    { id: "GD1", label: "Linje 1", workplaces: ["GD1", "ETIKETTO", "Packa L1"] },
+    { id: "GD2", label: "Linje 2", workplaces: ["GD2", "Logimark", "Packa L2/3"] },
+    { id: "GD3", label: "Linje 3", workplaces: ["GD3", "Logimark", "Packa L2/3"] },
+    { id: "GD4", label: "Linje 4", workplaces: ["GD4", "miniLogimark", "Packa L4"] }
+  ]
+};
+let appSettings = { ...DEFAULT_APP_SETTINGS };
 
 const AUTH_MODES = {
   login: {
@@ -118,8 +143,8 @@ let appUnlocked = false;
 let addMessageTimeoutId = null;
 function getDefaultBreakDay() {
   const weekday = new Date().getDay();
-  if (weekday >= 1 && weekday <= 5) return DAYS[weekday - 1];
-  return weekday === 6 ? DAYS[4] : DAYS[0];
+  const today = weekday >= 1 && weekday <= 5 ? ALL_DAYS[weekday - 1] : "";
+  return DAYS.includes(today) ? today : DAYS[0];
 }
 
 function resetBreakPlannerToToday() {
@@ -133,6 +158,25 @@ let selectedProductionDate = formatDateKey(new Date());
 let selectedCompetencyPersonId = "";
 let assessmentFormOpen = false;
 let editingAssessmentId = "";
+let autoLockTimeoutId = null;
+const scheduleUndoStack = [];
+const scheduleRedoStack = [];
+const scheduleFilters = { company: "", availability: "all", skill: "" };
+
+function showAppToast(text, type = "success") {
+  let toast = document.getElementById("appToast");
+  if (!toast) { toast = document.createElement("div"); toast.id = "appToast"; toast.className = "app-toast"; toast.setAttribute("role", "status"); document.body.appendChild(toast); }
+  toast.textContent = text;
+  toast.className = `app-toast ${type} visible`;
+  clearTimeout(showAppToast.timeoutId);
+  showAppToast.timeoutId = setTimeout(() => toast.classList.remove("visible"), 3200);
+}
+
+function recordScheduleHistory(schedule) {
+  scheduleUndoStack.push(structuredClone(schedule));
+  if (scheduleUndoStack.length > 30) scheduleUndoStack.shift();
+  scheduleRedoStack.length = 0;
+}
 
 function padNumber(value) {
   return String(value).padStart(2, "0");
@@ -201,9 +245,9 @@ function getWeekStorageKey(baseKey) {
 function getDatesForWeek() {
   const monday = getStartOfWeek();
 
-  return DAYS.map((_, index) => {
+  return DAYS.map(day => {
     const date = new Date(monday);
-    date.setDate(monday.getDate() + index);
+    date.setDate(monday.getDate() + ALL_DAYS.indexOf(day));
     return `${date.getDate()}/${date.getMonth() + 1}`;
   });
 }
@@ -345,7 +389,7 @@ function normalizeSchedule(schedule) {
 
 function createEmptyTrainingLeaders() {
   return Object.fromEntries(
-    TASKS.filter(task => task.includes("Utbildning")).map(task => [
+    TASKS.filter(isTrainingTaskName).map(task => [
       task,
       Object.fromEntries(DAYS.map(day => [day, ""]))
     ])
@@ -366,7 +410,7 @@ function normalizeTrainingLeaders(trainingLeaders) {
 
 function createEmptyTrainingLocations() {
   return Object.fromEntries(
-    TASKS.filter(task => task.includes("Utbildning")).map(task => [
+    TASKS.filter(isTrainingTaskName).map(task => [
       task,
       Object.fromEntries(DAYS.map(day => [day, ""]))
     ])
@@ -465,7 +509,7 @@ function getAssignedPeopleForDay(schedule, day, excludedTask = "") {
 function getTrainingLeadersForDay(trainingLeaders, day, excludedTask = "") {
   const leaders = new Set();
 
-  TASKS.filter(task => task.includes("Utbildning")).forEach(task => {
+  TASKS.filter(isTrainingTaskName).forEach(task => {
     if (task === excludedTask) return;
     const personId = trainingLeaders?.[task]?.[day];
     if (personId) leaders.add(personId);
@@ -505,7 +549,7 @@ async function createFairWeeklySchedule(priorityLines) {
   }
   const eligiblePeople = availablePeople.filter(person => {
     const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
-    return personSkills.some(skill => ["GD", "ETIKETTO", "Logimark", "Packa"].includes(skill));
+    return personSkills.length > 0;
   });
 
   if (!eligiblePeople.length) {
@@ -543,7 +587,7 @@ async function createFairWeeklySchedule(priorityLines) {
 
   DAYS.forEach((day, dayIndex) => {
     const assignedToday = new Set();
-    TASKS.filter(task => task.includes("Utbildning")).forEach(task => {
+    TASKS.filter(isTrainingTaskName).forEach(task => {
       const personId = schedule[task]?.[day];
       if (personId) {
         assignedToday.add(personId);
@@ -560,16 +604,18 @@ async function createFairWeeklySchedule(priorityLines) {
     const tasksForDay = productionTasks;
 
     tasksForDay.forEach((task, taskIndex) => {
-      const reservedForTraining = TASKS.filter(item => item.includes("Utbildning"))
+      const reservedForTraining = TASKS.filter(isTrainingTaskName)
         .some(item => schedule?.[item]?.[day] && trainingLocations?.[item]?.[day] === task);
       if (reservedForTraining) return;
 
       const department = getTaskDepartment(task);
+      const configuredSkills = customWorkItems.find(item => item.name === task)?.requiredSkills || [];
       const candidates = eligiblePeople
         .filter(person => {
           if (assignedToday.has(person.id)) return false;
           const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
           if (!personSkills.includes(department)) return false;
+          if (!configuredSkills.every(requiredSkill => personSkills.includes(requiredSkill))) return false;
           const personRestrictions = Array.isArray(restrictions[person.id])
             ? restrictions[person.id]
             : [];
@@ -659,7 +705,7 @@ function showSchedulePreview(result, people, options = {}) {
     const nameById = Object.fromEntries(people.map(person => [person.id, person.name]));
     const dates = getDatesForWeek();
     const isShareView = options.mode === "share";
-    const previewTasks = isShareView ? TASKS : TASKS.filter(task => !task.includes("Utbildning"));
+    const previewTasks = isShareView ? TASKS : TASKS.filter(task => !isTrainingTaskName(task));
     const rows = previewTasks.map(task => `
       <div class="preview-task">${escapeHtml(task)}</div>
       ${DAYS.map(day => {
@@ -670,7 +716,7 @@ function showSchedulePreview(result, people, options = {}) {
           if (trainee === "—") return "<div>—</div>";
           return `<div class="preview-training-details"><strong>${escapeHtml(trainee)}</strong><small><b>Handledare</b>${escapeHtml(leader)}</small><small><b>Plats</b>${escapeHtml(location)}</small></div>`;
         }
-        const trainingTask = TASKS.filter(item => item.includes("Utbildning"))
+        const trainingTask = TASKS.filter(isTrainingTaskName)
           .find(item => result.schedule?.[item]?.[day] && result.trainingLocations?.[item]?.[day] === task);
         const value = trainingTask ? "Utbildning" : nameById[result.schedule[task]?.[day]] || "—";
         if (isExtraPersonTask(task) && value !== "—") {
@@ -1077,7 +1123,7 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
   if (!card) return;
 
   const entries = [];
-  TASKS.filter(task => task.includes("Utbildning")).forEach(task => {
+  TASKS.filter(isTrainingTaskName).forEach(task => {
     DAYS.forEach(day => {
       const personId = schedule?.[task]?.[day];
       const person = people.find(item => item.id === personId);
@@ -1141,6 +1187,75 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
   summary.append(heading, list);
 }
 
+function setupAutoLock() {
+  const resetTimer = () => {
+    clearTimeout(autoLockTimeoutId);
+    const minutes = Number(appSettings.autoLockMinutes);
+    if (!minutes || !appUnlocked) return;
+    autoLockTimeoutId = setTimeout(async () => {
+      lockApp();
+      document.getElementById("appShell")?.classList.add("hidden");
+      await setupAuthUI();
+      showAuthMessage("Appen låstes automatiskt efter inaktivitet.", false);
+    }, minutes * 60 * 1000);
+  };
+  if (document.body.dataset.autoLockBound !== "true") {
+    document.body.dataset.autoLockBound = "true";
+    ["pointerdown", "keydown", "touchstart"].forEach(eventName => document.addEventListener(eventName, resetTimer, { passive: true }));
+  }
+  resetTimer();
+}
+
+async function changeAppPassword(nextPassword) {
+  const encryptedValues = [];
+  for (const key of Object.keys(localStorage).filter(isAppStorageKey)) {
+    if (key === STORAGE_KEYS.salt || key === STORAGE_KEYS.check || key === STORAGE_KEYS.automaticBackups || key === STORAGE_KEYS.dataSchemaVersion || key.endsWith("_week") || key === STORAGE_KEYS.peopleYear) continue;
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+    try { encryptedValues.push([key, await decryptJson(JSON.parse(raw), sessionKey)]); } catch { /* Unencrypted metadata is kept as-is. */ }
+  }
+  const salt = randomBytes(16);
+  const nextKey = await deriveAesKey(nextPassword, salt);
+  const checkPayload = await encryptJson({ ok: true }, nextKey);
+  localStorage.setItem(STORAGE_KEYS.salt, toBase64(salt));
+  localStorage.setItem(STORAGE_KEYS.check, JSON.stringify(checkPayload));
+  sessionKey = nextKey;
+  for (const [key, value] of encryptedValues) await encryptStoredItem(key, value);
+  dataStore.remove(STORAGE_KEYS.automaticBackups);
+  storeSessionPassword(nextPassword);
+  await createAutomaticBackupIfNeeded();
+}
+
+// واجهة التخزين الوحيدة التي تحتاج لاحقاً إلى الاستبدال عند إضافة API أو قاعدة بيانات.
+const dataStore = {
+  async get(key, fallback = null) { return decryptStoredItem(key, fallback); },
+  async set(key, value) { return encryptStoredItem(key, value); },
+  remove(key) { localStorage.removeItem(key); },
+  keys() { return Object.keys(localStorage); }
+};
+
+async function loadAppSettings() {
+  const stored = await dataStore.get(STORAGE_KEYS.appSettings, {});
+  appSettings = { ...DEFAULT_APP_SETTINGS, ...(stored || {}) };
+  const selectedDays = ALL_DAYS.filter(day => appSettings.workDays?.includes(day));
+  DAYS = selectedDays.length ? selectedDays : [...ALL_DAYS];
+  EXTRA_PERSON_ASSIGNMENTS = [...appSettings.extraAssignments];
+  BREAK_LINE_WORKPLACES = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.workplaces]));
+  BREAK_LINE_LABELS = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.label]));
+  BREAK_WORKPLACE_DISPLAY_ORDER = [...new Set(appSettings.breakLines.flatMap(line => line.workplaces))];
+}
+
+async function saveAppSettings(nextSettings) {
+  appSettings = { ...DEFAULT_APP_SETTINGS, ...nextSettings, workDays: ALL_DAYS.filter(day => nextSettings.workDays?.includes(day)) };
+  if (!appSettings.workDays.length) appSettings.workDays = [...ALL_DAYS];
+  DAYS = [...appSettings.workDays];
+  EXTRA_PERSON_ASSIGNMENTS = [...appSettings.extraAssignments];
+  BREAK_LINE_WORKPLACES = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.workplaces]));
+  BREAK_LINE_LABELS = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.label]));
+  BREAK_WORKPLACE_DISPLAY_ORDER = [...new Set(appSettings.breakLines.flatMap(line => line.workplaces))];
+  await dataStore.set(STORAGE_KEYS.appSettings, appSettings);
+}
+
 function setupShareSchedule() {
   const button = document.getElementById("shareScheduleBtn");
   if (!button || button.dataset.bound === "true") return;
@@ -1171,11 +1286,13 @@ function setupShareSchedule() {
 }
 
 function isExtraPersonTask(task) {
-  return task === "Extra person 1" || task === "Extra person 2";
+  return task === "Extra person 1" || task === "Extra person 2" ||
+    customWorkItems.some(item => item.enabled && item.name === task && item.type === "extra");
 }
 
 function isTrainingTaskName(task) {
-  return task.includes("Utbildning");
+  return task.includes("Utbildning") ||
+    customWorkItems.some(item => item.enabled && item.name === task && item.type === "training");
 }
 
 function getProductionWorkplaces() {
@@ -1184,10 +1301,19 @@ function getProductionWorkplaces() {
 
 function applyCustomWorkItems(items) {
   customWorkItems = Array.isArray(items)
-    ? items.filter(item => item && typeof item.name === "string" && item.name.trim())
+    ? items.filter(item => item && typeof item.name === "string" && item.name.trim()).map(item => ({
+      ...item,
+      id: item.id || makeId(),
+      enabled: item.enabled !== false,
+      type: ["machine", "department", "training", "extra"].includes(item.type) ? item.type : "machine",
+      staffCount: Math.max(1, Number(item.staffCount) || 1),
+      requiredSkills: Array.isArray(item.requiredSkills) ? item.requiredSkills.filter(Boolean) : [],
+      createdAt: item.createdAt || new Date().toISOString(),
+      updatedAt: item.updatedAt || item.createdAt || new Date().toISOString()
+    }))
     : [];
   TASKS = [...DEFAULT_TASKS];
-  customWorkItems.filter(item => item.showInSchema).forEach(item => {
+  customWorkItems.filter(item => item.enabled && item.showInSchema).forEach(item => {
     const existingIndex = TASKS.findIndex(task => task.toLocaleLowerCase() === item.name.toLocaleLowerCase());
     if (existingIndex !== -1) return;
     const afterIndex = TASKS.indexOf(item.after);
@@ -1201,13 +1327,36 @@ function applyCustomWorkItems(items) {
 
 async function loadCustomWorkItems() {
   if (!appUnlocked || !sessionKey) return applyCustomWorkItems([]);
-  const items = await decryptStoredItem(STORAGE_KEYS.workItems, []);
+  const items = await dataStore.get(STORAGE_KEYS.workItems, []);
   applyCustomWorkItems(Array.isArray(items) ? items : []);
 }
 
 async function saveCustomWorkItems(items) {
   applyCustomWorkItems(items);
-  await encryptStoredItem(STORAGE_KEYS.workItems, customWorkItems);
+  await dataStore.set(STORAGE_KEYS.workItems, customWorkItems);
+  localStorage.setItem(STORAGE_KEYS.dataSchemaVersion, "2");
+}
+
+async function getWorkItemTrash() {
+  if (!appUnlocked || !sessionKey) return [];
+  const items = await dataStore.get(STORAGE_KEYS.workItemTrash, []);
+  return Array.isArray(items) ? items : [];
+}
+
+async function saveWorkItemTrash(items) {
+  await dataStore.set(STORAGE_KEYS.workItemTrash, Array.isArray(items) ? items : []);
+}
+
+async function createWorkItemSafetySnapshot(reason) {
+  const snapshots = await dataStore.get(STORAGE_KEYS.safetySnapshots, []) || [];
+  const [trash, departments, results, skills, details] = await Promise.all([
+    getWorkItemTrash(), getDepartments(), getTestResults(), getMachineSkills(), getMachineSkillDetails()
+  ]);
+  snapshots.unshift({
+    id: makeId(), createdAt: new Date().toISOString(), reason,
+    data: { workItems: structuredClone(customWorkItems), trash, departments, results, skills, details }
+  });
+  await dataStore.set(STORAGE_KEYS.safetySnapshots, snapshots.slice(0, 5));
 }
 
 function cleanupOldWeeklyData() {
@@ -1453,6 +1602,7 @@ async function getSchedule() {
 async function saveSchedule(schedule) {
   await encryptStoredItem(getWeekStorageKey(STORAGE_KEYS.schedule), normalizeSchedule(schedule));
   localStorage.setItem(STORAGE_KEYS.scheduleWeek, getSelectedWeekKey());
+  localStorage.setItem(`${STORAGE_KEYS.scheduleUpdatedAt}:${getSelectedWeekKey()}`, new Date().toISOString());
 }
 
 async function getTrainingLeaders() {
@@ -1692,6 +1842,32 @@ function enhanceAppShell() {
   }
 
   const currentPage = location.pathname.split("/").pop() || "index.html";
+  if (!document.querySelector('link[rel="manifest"]')) {
+    const manifest = document.createElement("link"); manifest.rel = "manifest"; manifest.href = "manifest.webmanifest"; document.head.appendChild(manifest);
+  }
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./service-worker.js").catch(error => console.warn("Offline cache could not start", error));
+  const nav = document.querySelector(".nav");
+  if (nav && !nav.querySelector('[href="installningar.html"]')) {
+    nav.insertAdjacentHTML("beforeend", '<a class="nav-link" href="installningar.html">Inställningar</a><a class="nav-link" href="hjalp.html">Hjälp</a>');
+  }
+  const pageTips = {
+    "dashboard.html": "Här finns senaste status, ändringshistorik och knappar för krypterad backup och återställning.",
+    "index.html": "Dra en bemannad ruta till en annan för att flytta eller byta placering. Röda rutor behöver kontrolleras.",
+    "personal.html": "Använd status för sjukdom, semester eller annan frånvaro; schemat visar orsaken direkt.",
+    "add.html": "Pausa en arbetsplats när den inte används. Då bevaras historiken och den kan aktiveras igen.",
+    "maskiner.html": "Registrerad kompetens används för att varna och hjälpa autoschemat.",
+    "testresultat.html": "Sök fram en person och registrera resultaten per maskin eller avdelning.",
+    "bedomning.html": "Spara återkommande bedömningar för att se utveckling över tid.",
+    "todo.html": "Uppgifter som inte blir klara följer med som påminnelser till nästa vecka.",
+    "produktion.html": "Spara dagens resultat regelbundet; historiken finns kvar lokalt.",
+    "rast.html": "Kontrollera att alla valda linjer täcks innan rastplanen används.",
+    "installningar.html": "Ändringar här gäller bara den här enheten och sparas automatiskt när du trycker Spara."
+  };
+  const header = main?.querySelector(".header");
+  if (appSettings.showTips && header && pageTips[currentPage] && !main.querySelector(".page-tip")) {
+    header.insertAdjacentHTML("afterend", `<aside class="page-tip"><span>Tips</span><p>${escapeHtml(pageTips[currentPage])}</p><button type="button" aria-label="Dölj tips">×</button></aside>`);
+    main.querySelector(".page-tip button").addEventListener("click", event => event.currentTarget.parentElement.remove());
+  }
   document.querySelectorAll(".nav-link").forEach(link => {
     const isCurrent = link.getAttribute("href") === currentPage;
     link.classList.toggle("active", isCurrent);
@@ -1709,6 +1885,110 @@ function enhanceAppShell() {
     footer.removeAttribute("style");
     footer.textContent = `© ${new Date().getFullYear()} Mizzar — Staff Planner`;
   }
+}
+
+async function renderSettings() {
+  const root = document.getElementById("settingsPage");
+  if (!root) return;
+  const snapshots = await dataStore.get(STORAGE_KEYS.safetySnapshots, []) || [];
+  const automaticBackups = await dataStore.get(STORAGE_KEYS.automaticBackups, []) || [];
+  root.innerHTML = `
+    <form id="generalSettingsForm" class="card settings-card">
+      <div><h3>Allmänt</h3><p>Grundinställningar för den här enheten.</p></div>
+      <label>Arbetsplatsens namn<input id="organizationNameSetting" value="${escapeHtml(appSettings.organizationName || "")}" placeholder="Företag eller avdelning" /></label>
+      <fieldset><legend>Arbetsdagar</legend><div class="settings-day-grid">${ALL_DAYS.map(day => `<label><input type="checkbox" name="workDay" value="${day}"${DAYS.includes(day) ? " checked" : ""} /> ${day}</label>`).join("")}</div></fieldset>
+      <label>Automatisk låsning<select id="autoLockSetting"><option value="5">Efter 5 minuter</option><option value="15">Efter 15 minuter</option><option value="30">Efter 30 minuter</option><option value="60">Efter 1 timme</option><option value="0">Aldrig</option></select></label>
+      <label>E-post för feedback<input id="feedbackEmailSetting" type="email" value="${escapeHtml(appSettings.feedbackEmail || "")}" placeholder="namn@foretag.se" /></label>
+      <label>Maskiner i produktion<input id="productionMachinesSetting" value="${escapeHtml(appSettings.productionMachines.join(", "))}" /><small>Separera med kommatecken.</small></label>
+      <label>Uppgifter för extra person<textarea id="extraAssignmentsSetting" rows="3">${escapeHtml(appSettings.extraAssignments.join("\n"))}</textarea><small>En uppgift per rad.</small></label>
+      <label>Rastlinjer<textarea id="breakLinesSetting" rows="5">${escapeHtml(appSettings.breakLines.map(line => `${line.id} | ${line.label} | ${line.workplaces.join(", ")}`).join("\n"))}</textarea><small>Format: ID | Visningsnamn | arbetsplatser separerade med kommatecken.</small></label>
+      <label class="settings-switch"><input id="showTipsSetting" type="checkbox"${appSettings.showTips ? " checked" : ""} /><span>Visa tips och hjälptexter</span></label>
+      <div class="settings-actions"><span id="settingsMessage" class="inline-message" aria-live="polite"></span><button class="btn primary" type="submit">Spara inställningar</button></div>
+    </form>
+    <section class="card settings-card"><div><h3>Maskiner, avdelningar och uppgifter</h3><p>Lägg till, redigera, pausa och ordna arbetsplatser från en samlad vy.</p></div><div class="settings-actions"><button id="removeDemoDataBtn" class="btn danger" type="button">Ta bort testdata</button><a class="btn primary settings-link" href="add.html#workItemForm">Öppna hanteraren</a></div></section>
+    <section class="card settings-card"><div><h3>Säkerhet och historik</h3><p>${snapshots.length} säkerhetspunkter och ${automaticBackups.length} automatiska helhetskopior finns sparade.</p></div><details class="password-change"><summary>Byt lösenord</summary><form id="changePasswordForm"><label>Nuvarande lösenord<input id="currentPasswordSetting" type="password" autocomplete="current-password" required /></label><label>Nytt lösenord<input id="newPasswordSetting" type="password" minlength="6" autocomplete="new-password" required /></label><label>Bekräfta nytt lösenord<input id="confirmPasswordSetting" type="password" minlength="6" autocomplete="new-password" required /></label><div class="settings-actions"><span id="passwordChangeMessage" class="inline-message"></span><button class="btn primary" type="submit">Spara nytt lösenord</button></div></form></details><div class="settings-actions"><button id="exportSettingsBackupBtn" class="btn" type="button">Exportera backup</button></div><h4>Automatiska helhetskopior</h4><div class="snapshot-list">${automaticBackups.map(item => `<article><div><strong>Automatisk backup</strong><small>${new Date(item.createdAt).toLocaleString("sv-SE")}</small></div><button class="btn" type="button" data-restore-auto-backup="${item.id}">Återställ</button></article>`).join("") || '<div class="empty-state">Den första kopian skapas automatiskt idag.</div>'}</div><h4>Säkerhetspunkter för arbetsplatser</h4><div id="snapshotList" class="snapshot-list">${snapshots.map(item => `<article><div><strong>${escapeHtml(item.reason)}</strong><small>${new Date(item.createdAt).toLocaleString("sv-SE")}</small></div><button class="btn" type="button" data-restore-snapshot="${item.id}">Återställ</button></article>`).join("") || '<div class="empty-state">Inga säkerhetspunkter ännu.</div>'}</div></section>`;
+  root.querySelector("#autoLockSetting").value = String(appSettings.autoLockMinutes);
+  bindOnce(root.querySelector("#generalSettingsForm"), "submit", async event => {
+    event.preventDefault();
+    const workDays = [...root.querySelectorAll('[name="workDay"]:checked')].map(input => input.value);
+    if (!workDays.length) { root.querySelector("#settingsMessage").textContent = "Välj minst en arbetsdag."; root.querySelector("#settingsMessage").className = "inline-message error"; return; }
+    const productionMachines = root.querySelector("#productionMachinesSetting").value.split(",").map(value => value.trim()).filter(Boolean);
+    const extraAssignments = root.querySelector("#extraAssignmentsSetting").value.split("\n").map(value => value.trim()).filter(Boolean);
+    const breakLines = root.querySelector("#breakLinesSetting").value.split("\n").map(value => { const [id, label, workplaces = ""] = value.split("|").map(part => part.trim()); return { id, label: label || id, workplaces: workplaces.split(",").map(part => part.trim()).filter(Boolean) }; }).filter(line => line.id && line.workplaces.length);
+    if (!productionMachines.length || !extraAssignments.length || !breakLines.length) { root.querySelector("#settingsMessage").textContent = "Produktion, extrauppgifter och rastlinjer får inte vara tomma."; root.querySelector("#settingsMessage").className = "inline-message error"; return; }
+    await saveAppSettings({ ...appSettings, workDays, productionMachines, extraAssignments, breakLines, organizationName: root.querySelector("#organizationNameSetting").value.trim(), autoLockMinutes: Number(root.querySelector("#autoLockSetting").value), feedbackEmail: root.querySelector("#feedbackEmailSetting").value.trim(), showTips: root.querySelector("#showTipsSetting").checked });
+    root.querySelector("#settingsMessage").textContent = "Inställningarna har sparats.";
+    root.querySelector("#settingsMessage").className = "inline-message success";
+    await addAuditEvent("settings", "Inställningar uppdaterade", appSettings.organizationName);
+  });
+  bindOnce(root.querySelector("#exportSettingsBackupBtn"), "click", downloadBackup);
+  bindOnce(root.querySelector("#removeDemoDataBtn"), "click", async () => {
+    const people = await getPeople();
+    const demoPeople = people.filter(person => person.demo);
+    if (!demoPeople.length) return showAppToast("Det finns ingen testdata att ta bort.", "error");
+    await savePeople(people.filter(person => !person.demo));
+    showAppToast(`${demoPeople.length} testpersoner togs bort.`);
+  });
+  bindOnce(root.querySelector("#changePasswordForm"), "submit", async event => {
+    event.preventDefault();
+    const currentPassword = root.querySelector("#currentPasswordSetting").value;
+    const nextPassword = root.querySelector("#newPasswordSetting").value;
+    const confirmation = root.querySelector("#confirmPasswordSetting").value;
+    const status = root.querySelector("#passwordChangeMessage");
+    if (currentPassword !== getStoredSessionPassword()) { status.textContent = "Nuvarande lösenord är fel."; status.className = "inline-message error"; return; }
+    if (nextPassword.length < 6 || nextPassword !== confirmation) { status.textContent = "Det nya lösenordet måste vara minst 6 tecken och matcha."; status.className = "inline-message error"; return; }
+    await changeAppPassword(nextPassword);
+    event.currentTarget.reset();
+    status.textContent = "Lösenordet har ändrats och all data krypterats på nytt.";
+    status.className = "inline-message success";
+  });
+  root.querySelectorAll("[data-restore-snapshot]").forEach(button => button.addEventListener("click", async () => {
+    const snapshot = snapshots.find(item => item.id === button.dataset.restoreSnapshot);
+    if (!snapshot || !confirm(`Återställ säkerhetspunkten "${snapshot.reason}"?`)) return;
+    await createWorkItemSafetySnapshot("Före återställning");
+    await Promise.all([saveCustomWorkItems(snapshot.data.workItems || []), saveWorkItemTrash(snapshot.data.trash || []), saveDepartments(snapshot.data.departments || []), saveTestResults(snapshot.data.results || {}), saveMachineSkills(snapshot.data.skills || {}), saveMachineSkillDetails(snapshot.data.details || {})]);
+    await addAuditEvent("backup", "Säkerhetspunkt återställd", snapshot.reason);
+    location.reload();
+  }));
+  root.querySelectorAll("[data-restore-auto-backup]").forEach(button => button.addEventListener("click", async () => {
+    const backup = automaticBackups.find(item => item.id === button.dataset.restoreAutoBackup);
+    if (!backup || !confirm("Återställ hela den lokala datan från denna tidpunkt?")) return;
+    const auth = { salt: localStorage.getItem(STORAGE_KEYS.salt), check: localStorage.getItem(STORAGE_KEYS.check) };
+    Object.keys(localStorage).filter(key => isAppStorageKey(key) && key !== STORAGE_KEYS.salt && key !== STORAGE_KEYS.check).forEach(key => localStorage.removeItem(key));
+    Object.entries(backup.data || {}).forEach(([key, value]) => { if (key !== STORAGE_KEYS.salt && key !== STORAGE_KEYS.check) localStorage.setItem(key, value); });
+    if (auth.salt) localStorage.setItem(STORAGE_KEYS.salt, auth.salt);
+    if (auth.check) localStorage.setItem(STORAGE_KEYS.check, auth.check);
+    location.reload();
+  }));
+}
+
+function renderHelpPage() {
+  const root = document.getElementById("helpPage");
+  if (!root) return;
+  root.innerHTML = `<section class="card help-intro"><div><h3>Kom igång</h3><p>All data sparas krypterat på den här enheten. Exportera backup regelbundet.</p></div><a class="btn primary" href="installningar.html">Öppna inställningar</a></section><div class="help-grid"><article class="card"><span>1</span><h3>Lägg till personal</h3><p>Öppna Lägg till, registrera namn och företag. Tillgänglighet ändras på personalsidan.</p></article><article class="card"><span>2</span><h3>Bygg arbetsplatser</h3><p>Lägg till maskiner, avdelningar, utbildningar och extraplatser. De kan pausas och ordnas.</p></article><article class="card"><span>3</span><h3>Skapa schema</h3><p>Välj personal, dra placeringar mellan rutor, kopiera dagar eller använd en sparad veckomall.</p></article><article class="card"><span>4</span><h3>Kontrollera varningar</h3><p>Röda rutor saknar bemanning. Inaktiva eller obehöriga personer visar orsaken direkt.</p></article><article class="card"><span>5</span><h3>Säkerhetskopiera</h3><p>Exportera en krypterad backup från Översikt eller Inställningar innan större förändringar.</p></article><article class="card"><span>6</span><h3>Installera</h3><p>I webbläsarens meny kan appen installeras på datorn när PWA-stödet är aktiverat.</p></article></div><section class="card help-feedback"><div><h3>Förslag eller problem?</h3><p>Skicka feedback till den adress som angetts i Inställningar.</p></div>${appSettings.feedbackEmail ? `<a class="btn" href="mailto:${escapeHtml(appSettings.feedbackEmail)}?subject=Staff%20Planner%20feedback">Skicka feedback</a>` : '<a class="btn" href="installningar.html">Ange feedbackadress</a>'}</section>`;
+}
+
+async function setupOnboarding() {
+  if (appSettings.onboardingComplete || !document.getElementById("appShell") || document.getElementById("onboardingModal")) return;
+  const overlay = document.createElement("div");
+  overlay.id = "onboardingModal";
+  overlay.className = "modal-overlay onboarding-overlay";
+  overlay.innerHTML = `<section class="onboarding-modal"><span class="onboarding-kicker">Välkommen</span><h2>Gör Staff Planner redo</h2><p>Tre små val räcker. Allt kan ändras senare i Inställningar.</p><form id="onboardingForm"><label>Arbetsplatsens namn<input id="onboardingOrganization" placeholder="Företag eller avdelning" /></label><fieldset><legend>Arbetsdagar</legend><div class="settings-day-grid">${ALL_DAYS.map(day => `<label><input type="checkbox" name="onboardingDay" value="${day}" checked /> ${day}</label>`).join("")}</div></fieldset><label>Personal, en person per rad<textarea id="onboardingPeople" rows="5" placeholder="Anna Andersson&#10;Erik Svensson"></textarea></label><label class="settings-switch"><input id="onboardingDemo" type="checkbox" /><span>Lägg till tre tydligt märkta testpersoner</span></label><div class="onboarding-actions"><button id="skipOnboarding" class="btn" type="button">Hoppa över</button><button class="btn primary" type="submit">Spara och börja</button></div></form></section>`;
+  document.body.appendChild(overlay);
+  const complete = async extra => { await saveAppSettings({ ...appSettings, onboardingComplete: true, ...extra }); overlay.remove(); showAppToast("Grundinställningen är klar."); };
+  overlay.querySelector("#skipOnboarding").addEventListener("click", () => complete({}));
+  overlay.querySelector("#onboardingForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const workDays = [...overlay.querySelectorAll('[name="onboardingDay"]:checked')].map(input => input.value);
+    if (!workDays.length) return showAppToast("Välj minst en arbetsdag.", "error");
+    const names = overlay.querySelector("#onboardingPeople").value.split("\n").map(value => value.trim()).filter(Boolean);
+    const people = await getPeople();
+    names.forEach(name => people.push({ id: makeId(), name, company: "", createdAt: new Date().toISOString() }));
+    if (overlay.querySelector("#onboardingDemo").checked) ["Testperson Anna", "Testperson Erik", "Testperson Sara"].forEach(name => people.push({ id: makeId(), name, company: "TESTDATA", demo: true, createdAt: new Date().toISOString() }));
+    await savePeople(people);
+    await complete({ workDays, organizationName: overlay.querySelector("#onboardingOrganization").value.trim() });
+    await refreshAppViews();
+  });
 }
 
 function formatBreakEnd(start, durationMinutes) {
@@ -2724,6 +3004,71 @@ function escapeHtml(value) {
   });
 }
 
+async function renderScheduleTools(schedule, people = [], skills = {}) {
+  const root = document.getElementById("scheduleGrid");
+  const card = root?.parentElement;
+  if (!card) return;
+  let tools = card.querySelector(".schedule-tools");
+  if (!tools) { tools = document.createElement("div"); tools.className = "schedule-tools"; card.insertBefore(tools, root); }
+  const templates = await dataStore.get(STORAGE_KEYS.scheduleTemplates, []) || [];
+  const updatedAt = localStorage.getItem(`${STORAGE_KEYS.scheduleUpdatedAt}:${getSelectedWeekKey()}`);
+  const companies = [...new Set(people.map(person => person.company).filter(Boolean))].sort((a, b) => a.localeCompare(b, "sv"));
+  const knownSkills = [...new Set(Object.values(skills).flat().filter(Boolean))].sort((a, b) => a.localeCompare(b, "sv"));
+  tools.innerHTML = `<div class="schedule-filter-tools"><label>Företag<select id="scheduleCompanyFilter"><option value="">Alla</option>${companies.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label><label>Status<select id="scheduleAvailabilityFilter"><option value="all">Alla</option><option value="available">Tillgänglig</option><option value="sick">Sjuk</option><option value="vacation">Semester</option><option value="unavailable">Ej tillgänglig</option></select></label><label>Kompetens<select id="scheduleSkillFilter"><option value="">Alla</option>${knownSkills.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label></div><div class="schedule-copy-tools"><label>Från<select id="copyDayFrom">${DAYS.map(day => `<option>${day}</option>`).join("")}</select></label><label>Till<select id="copyDayTo">${DAYS.map((day, index) => `<option${index === 1 ? " selected" : ""}>${day}</option>`).join("")}</select></label><button id="copyScheduleDay" class="btn" type="button">Kopiera dag</button></div><div class="schedule-template-tools"><select id="scheduleTemplateSelect"><option value="">Välj mall</option>${templates.map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button id="saveScheduleTemplate" class="btn" type="button">Spara veckan som mall</button><button id="applyScheduleTemplate" class="btn" type="button">Använd mall</button></div><div class="schedule-history-tools"><button id="undoSchedule" class="btn" type="button"${scheduleUndoStack.length ? "" : " disabled"}>↶ Ångra</button><button id="redoSchedule" class="btn" type="button"${scheduleRedoStack.length ? "" : " disabled"}>↷ Gör om</button><span class="schedule-save-state">✓ ${updatedAt ? `Sparat ${new Date(updatedAt).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : "Redo att spara"}</span></div>`;
+  tools.querySelector("#scheduleCompanyFilter").value = scheduleFilters.company;
+  tools.querySelector("#scheduleAvailabilityFilter").value = scheduleFilters.availability;
+  tools.querySelector("#scheduleSkillFilter").value = scheduleFilters.skill;
+  [["#scheduleCompanyFilter", "company"], ["#scheduleAvailabilityFilter", "availability"], ["#scheduleSkillFilter", "skill"]].forEach(([selector, key]) => tools.querySelector(selector).addEventListener("change", async event => { scheduleFilters[key] = event.target.value; await renderSchedule(); }));
+  tools.querySelector("#copyScheduleDay").addEventListener("click", async () => {
+    const from = tools.querySelector("#copyDayFrom").value, to = tools.querySelector("#copyDayTo").value;
+    if (from === to) return showAppToast("Välj två olika dagar.", "error");
+    recordScheduleHistory(schedule);
+    TASKS.forEach(task => { schedule[task] ??= {}; schedule[task][to] = schedule[task][from] || ""; });
+    await saveSchedule(schedule); showAppToast(`${from} kopierades till ${to}.`); await renderSchedule();
+  });
+  tools.querySelector("#saveScheduleTemplate").addEventListener("click", async () => {
+    const name = window.prompt("Namn på mallen:", `Veckomall ${templates.length + 1}`)?.trim();
+    if (!name) return;
+    await dataStore.set(STORAGE_KEYS.scheduleTemplates, [...templates, { id: makeId(), name, createdAt: new Date().toISOString(), schedule: structuredClone(schedule) }]);
+    showAppToast("Veckomallen har sparats."); await renderScheduleTools(schedule);
+  });
+  tools.querySelector("#applyScheduleTemplate").addEventListener("click", async () => {
+    const template = templates.find(item => item.id === tools.querySelector("#scheduleTemplateSelect").value);
+    if (!template) return showAppToast("Välj en mall först.", "error");
+    recordScheduleHistory(schedule); await saveSchedule(normalizeSchedule(template.schedule)); showAppToast("Veckomallen har lagts in."); await renderSchedule();
+  });
+  tools.querySelector("#undoSchedule").addEventListener("click", async () => {
+    const previous = scheduleUndoStack.pop(); if (!previous) return;
+    scheduleRedoStack.push(structuredClone(schedule)); await saveSchedule(previous); showAppToast("Senaste schemaändringen ångrades."); await renderSchedule();
+  });
+  tools.querySelector("#redoSchedule").addEventListener("click", async () => {
+    const next = scheduleRedoStack.pop(); if (!next) return;
+    scheduleUndoStack.push(structuredClone(schedule)); await saveSchedule(next); showAppToast("Schemaändringen gjordes om."); await renderSchedule();
+  });
+}
+
+function bindScheduleDragAndDrop(root, schedule) {
+  root.querySelectorAll('.cell[data-task][data-day][data-simple="true"]').forEach(cell => {
+    const { task, day } = cell.dataset;
+    if (schedule?.[task]?.[day]) cell.draggable = true;
+    cell.addEventListener("dragstart", event => { event.dataTransfer.setData("text/plain", JSON.stringify({ task, day })); cell.classList.add("is-dragging"); });
+    cell.addEventListener("dragend", () => cell.classList.remove("is-dragging"));
+    cell.addEventListener("dragover", event => { event.preventDefault(); cell.classList.add("is-drop-target"); });
+    cell.addEventListener("dragleave", () => cell.classList.remove("is-drop-target"));
+    cell.addEventListener("drop", async event => {
+      event.preventDefault(); cell.classList.remove("is-drop-target");
+      let source; try { source = JSON.parse(event.dataTransfer.getData("text/plain")); } catch { return; }
+      if (!source?.task || !source?.day || (source.task === task && source.day === day)) return;
+      recordScheduleHistory(schedule);
+      const sourceValue = schedule[source.task]?.[source.day] || "";
+      const targetValue = schedule[task]?.[day] || "";
+      schedule[source.task][source.day] = targetValue;
+      schedule[task] ??= {}; schedule[task][day] = sourceValue;
+      await saveSchedule(schedule); showAppToast("Placeringen flyttades och sparades."); await renderSchedule();
+    });
+  });
+}
+
 async function renderSchedule() {
   const root = document.getElementById("scheduleGrid");
   if (!root) return;
@@ -2739,6 +3084,8 @@ async function renderSchedule() {
       getMachineRestrictions()
     ]);
   const dates = getDatesForWeek();
+
+  await renderScheduleTools(schedule, people, skills);
 
   renderAvailabilitySummary(root, people);
   renderTrainingScheduleSummary(root, people, schedule, trainingLocations);
@@ -2758,7 +3105,9 @@ async function renderSchedule() {
   });
 
   TASKS.forEach(task => {
-    const isTrainingTask = task.includes("Utbildning");
+    const workItem = customWorkItems.find(item => item.enabled && item.name === task);
+    const requiredStaff = Math.max(1, Number(workItem?.staffCount) || 1);
+    const isTrainingTask = isTrainingTaskName(task);
     const isExtraTask = isExtraPersonTask(task);
     const trainingVariantClass = task === "Utbildning 1"
       ? "utbildning-1"
@@ -2769,7 +3118,9 @@ async function renderSchedule() {
       ? `task utbildning ${trainingVariantClass}`
       : isExtraTask ? "task extra-person-task" : "task";
 
-    root.appendChild(makeCell(task, taskClassName));
+    const taskCell = makeCell("", taskClassName);
+    taskCell.innerHTML = `<span>${escapeHtml(task)}</span>${requiredStaff > 1 ? `<small class="required-staff-badge">${requiredStaff} personer behövs</small>` : ""}`;
+    root.appendChild(taskCell);
 
     DAYS.forEach(day => {
       const cell = document.createElement("div");
@@ -2779,7 +3130,7 @@ async function renderSchedule() {
       const dayTrainingLeaders = getTrainingLeadersForDay(trainingLeaders, day);
       const selectedPersonId = schedule[task]?.[day] ?? "";
       const trainingReservation = !isTrainingTask
-        ? TASKS.filter(item => item.includes("Utbildning")).map(trainingTask => ({
+        ? TASKS.filter(isTrainingTaskName).map(trainingTask => ({
             trainingTask,
             person: people.find(person => person.id === schedule?.[trainingTask]?.[day]),
             location: trainingLocations?.[trainingTask]?.[day]
@@ -2789,6 +3140,16 @@ async function renderSchedule() {
       cell.className = isTrainingTask
         ? `cell utbildning ${trainingVariantClass}`
         : isExtraTask ? "cell extra-person-cell" : "cell";
+      cell.dataset.task = task;
+      cell.dataset.day = day;
+      cell.dataset.simple = String(!isTrainingTask && !isExtraTask);
+      if (!selectedPersonId && !isTrainingTask && !isExtraTask) {
+        cell.classList.add("schedule-shortage");
+        cell.title = `${task} saknar bemanning ${day}`;
+      } else if (requiredStaff > 1 && selectedPersonId) {
+        cell.classList.add("schedule-shortage");
+        cell.title = `${task} behöver ${requiredStaff} personer; nuvarande schema har en plats`;
+      }
       select.className = "schedule-select";
 
       if (isTrainingTask) {
@@ -2812,6 +3173,9 @@ async function renderSchedule() {
 
       people.forEach(person => {
         if (trainingReservation) return;
+        if (scheduleFilters.company && person.company !== scheduleFilters.company) return;
+        if (scheduleFilters.availability !== "all" && getPersonAvailability(person) !== scheduleFilters.availability) return;
+        if (scheduleFilters.skill && !(skills[person.id] || []).includes(scheduleFilters.skill)) return;
         if (assignedPeople.has(person.id) && person.id !== selectedPersonId) {
           return;
         }
@@ -2821,14 +3185,13 @@ async function renderSchedule() {
         }
 
         const availability = getPersonAvailability(person);
-        if (availability !== "available") return;
         if (
           isExtraTask &&
           extraPersonLocations[task]?.[day] === "GD-rummet" &&
           Array.isArray(restrictions[person.id]) &&
           restrictions[person.id].includes("GD")
         ) return;
-        let eligibilityLabel = "";
+        let eligibilityLabel = availability === "available" ? "" : getUnavailableMessage(person);
         if (!isTrainingTask && !isExtraTask) {
           const department = getTaskDepartment(task);
           const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
@@ -2848,7 +3211,7 @@ async function renderSchedule() {
           ? `${person.name} — ${eligibilityLabel}`
           : person.name;
         option.selected = selectedPersonId === person.id;
-        option.disabled = Boolean(eligibilityLabel);
+        option.disabled = Boolean(eligibilityLabel && eligibilityLabel !== "Kompetens saknas");
         if (eligibilityLabel) {
           option.className = eligibilityLabel === "Får inte GD"
             ? "schedule-option-restricted"
@@ -2871,23 +3234,24 @@ async function renderSchedule() {
         const selectedPerson = people.find(person => person.id === selectedId);
 
         if (selectedPerson && getPersonAvailability(selectedPerson) !== "available") {
-          alert(getUnavailableMessage(selectedPerson));
+          showAppToast(getUnavailableMessage(selectedPerson), "error");
           await renderSchedule();
           return;
         }
 
         if (selectedId && assignedElsewhere.has(selectedId)) {
-          alert("Den här personen är redan schemalagd i en annan avdelning samma dag.");
+          showAppToast("Den här personen är redan schemalagd i en annan avdelning samma dag.", "error");
           await renderSchedule();
           return;
         }
 
         if (!isTrainingTask && selectedId && getTrainingLeadersForDay(trainingLeaders, day).has(selectedId)) {
-          alert("Den här personen är vald som handledare och kan inte samtidigt arbeta på en maskin.");
+          showAppToast("Den här personen är vald som handledare och kan inte samtidigt arbeta på en maskin.", "error");
           await renderSchedule();
           return;
         }
 
+        recordScheduleHistory(schedule);
         schedule[task] ??= {};
         schedule[task][day] = selectedId;
 
@@ -2952,7 +3316,7 @@ async function renderSchedule() {
             ? restrictions[selectedPersonId]
             : [];
           if (locationSelect.value === "GD-rummet" && selectedRestrictions.includes("GD")) {
-            alert("Den valda personen får inte arbeta på GD och kan därför inte placeras i GD-rummet.");
+            showAppToast("Den valda personen får inte arbeta på GD och kan därför inte placeras i GD-rummet.", "error");
             locationSelect.value = extraPersonLocations[task]?.[day] || "";
             return;
           }
@@ -3011,12 +3375,12 @@ async function renderSchedule() {
         leaderSelect.addEventListener("change", async () => {
           const leaderId = leaderSelect.value;
           if (leaderId && getAssignedPeopleForDay(schedule, day).has(leaderId)) {
-            alert("Den här personen arbetar redan på en maskin eller avdelning den här dagen.");
+            showAppToast("Den här personen arbetar redan på en maskin eller avdelning den här dagen.", "error");
             await renderSchedule();
             return;
           }
           if (leaderId && getTrainingLeadersForDay(trainingLeaders, day, task).has(leaderId)) {
-            alert("Den här personen är redan handledare för en annan utbildning den här dagen.");
+            showAppToast("Den här personen är redan handledare för en annan utbildning den här dagen.", "error");
             await renderSchedule();
             return;
           }
@@ -3043,7 +3407,7 @@ async function renderSchedule() {
         getProductionWorkplaces().forEach(location => {
           const option = document.createElement("option");
           const occupiedBy = schedule?.[location]?.[day];
-          const reservedByOtherTraining = TASKS.filter(item => item.includes("Utbildning") && item !== task)
+          const reservedByOtherTraining = TASKS.filter(item => isTrainingTaskName(item) && item !== task)
             .some(item => trainingLocations?.[item]?.[day] === location && schedule?.[item]?.[day]);
           option.value = location;
           option.textContent = occupiedBy || reservedByOtherTraining
@@ -3057,14 +3421,14 @@ async function renderSchedule() {
         locationSelect.addEventListener("change", async () => {
           const nextLocation = locationSelect.value;
           if (nextLocation && schedule?.[nextLocation]?.[day]) {
-            alert("Den här maskinen eller avdelningen är redan upptagen den här dagen.");
+            showAppToast("Den här maskinen eller avdelningen är redan upptagen den här dagen.", "error");
             await renderSchedule();
             return;
           }
-          const usedByOtherTraining = TASKS.filter(item => item.includes("Utbildning") && item !== task)
+          const usedByOtherTraining = TASKS.filter(item => isTrainingTaskName(item) && item !== task)
             .some(item => trainingLocations?.[item]?.[day] === nextLocation && schedule?.[item]?.[day]);
           if (nextLocation && usedByOtherTraining) {
-            alert("Platsen används redan av en annan utbildning den här dagen.");
+            showAppToast("Platsen används redan av en annan utbildning den här dagen.", "error");
             await renderSchedule();
             return;
           }
@@ -3081,6 +3445,8 @@ async function renderSchedule() {
       root.appendChild(cell);
     });
   });
+
+  bindScheduleDragAndDrop(root, schedule);
 
   const card = root.parentElement;
   let historyNotice = card?.querySelector(".schedule-history-notice");
@@ -3173,7 +3539,7 @@ async function renderPeople() {
           DAYS.forEach(day => {
             if (schedule[task]?.[day] === person.id) {
               schedule[task][day] = "";
-              if (task.includes("Utbildning") && trainingLocations[task]?.[day]) {
+              if (isTrainingTaskName(task) && trainingLocations[task]?.[day]) {
                 trainingLocations[task][day] = "";
               }
             }
@@ -3733,7 +4099,7 @@ async function renderProduction() {
   const [people, records, settings, schedule] = await Promise.all([
     getPeople(), getProductionRecords(), getProductionSettings(), getScheduleForDate(selectedProductionDate)
   ]);
-  const machines = ["GD1", "GD2", "GD3", "GD4"];
+  const machines = appSettings.productionMachines?.length ? appSettings.productionMachines : ["GD1", "GD2", "GD3", "GD4"];
   const stored = records[selectedProductionDate];
   const dayIndex = (() => {
     const [year, month, day] = selectedProductionDate.split("-").map(Number);
@@ -3778,7 +4144,7 @@ async function renderProduction() {
     if (enteredValue === null) return;
     const newRecord = Number(enteredValue);
     if (!Number.isFinite(newRecord) || newRecord < 0) {
-      alert("Ange ett giltigt fabriksrekord.");
+      showAppToast("Ange ett giltigt fabriksrekord.", "error");
       return;
     }
     settings.factoryRecord = Math.round(newRecord);
@@ -3887,6 +4253,18 @@ function createBackupPayload() {
   };
 }
 
+async function createAutomaticBackupIfNeeded() {
+  const backups = await dataStore.get(STORAGE_KEYS.automaticBackups, []) || [];
+  const today = formatDateKey(new Date());
+  if (backups.some(item => String(item.createdAt).startsWith(today))) return;
+  const payload = createBackupPayload();
+  delete payload.data[STORAGE_KEYS.automaticBackups];
+  delete payload.data[STORAGE_KEYS.salt];
+  delete payload.data[STORAGE_KEYS.check];
+  backups.unshift({ id: makeId(), createdAt: new Date().toISOString(), data: payload.data });
+  await dataStore.set(STORAGE_KEYS.automaticBackups, backups.slice(0, 7));
+}
+
 function isValidBackupPayload(payload) {
   if (
     payload?.app !== "Staff Planner" ||
@@ -3898,9 +4276,14 @@ function isValidBackupPayload(payload) {
     return false;
   }
 
-  return Object.entries(payload.data).every(([key, value]) =>
-    isAppStorageKey(key) && typeof value === "string"
-  );
+  return Object.entries(payload.data).every(([key, value]) => {
+    if (!isAppStorageKey(key) || typeof value !== "string") return false;
+    if (!key.includes("_enc")) return true;
+    try {
+      const encrypted = JSON.parse(value);
+      return typeof encrypted?.iv === "string" && typeof encrypted?.data === "string" && encrypted.iv.length > 8 && encrypted.data.length > 8;
+    } catch { return false; }
+  });
 }
 
 function downloadBackup() {
@@ -3942,7 +4325,7 @@ function setupDataTools() {
         location.reload();
       } catch (error) {
         console.error("Could not import backup", error);
-        alert("Backupfilen är ogiltig eller skadad.");
+        showAppToast("Backupfilen är ogiltig eller skadad.", "error");
       } finally {
         input.value = "";
       }
@@ -4143,7 +4526,7 @@ function setupAddForm() {
   });
 }
 
-async function setupWorkItemManager() {
+async function setupWorkItemManagerLegacy() {
   const form = document.getElementById("workItemForm");
   const nameInput = document.getElementById("workItemName");
   const afterSelect = document.getElementById("workItemAfter");
@@ -4237,6 +4620,264 @@ async function setupWorkItemManager() {
   renderManager();
 }
 
+async function renameWorkItemReferences(previousName, nextName) {
+  if (previousName === nextName) return;
+  const [departments, results, skills, details] = await Promise.all([
+    getDepartments(), getTestResults(), getMachineSkills(), getMachineSkillDetails()
+  ]);
+  const renamedDepartments = departments.map(value => value === previousName ? nextName : value);
+  Object.values(results).forEach(personResults => {
+    if (personResults && Object.hasOwn(personResults, previousName)) {
+      personResults[nextName] = personResults[previousName];
+      delete personResults[previousName];
+    }
+  });
+  Object.keys(skills).forEach(personId => {
+    if (Array.isArray(skills[personId])) {
+      skills[personId] = skills[personId].map(value => value === previousName ? nextName : value);
+    }
+  });
+  Object.values(details).forEach(personDetails => {
+    if (personDetails && Object.hasOwn(personDetails, previousName)) {
+      personDetails[nextName] = personDetails[previousName];
+      delete personDetails[previousName];
+    }
+  });
+  await Promise.all([
+    saveDepartments(renamedDepartments), saveTestResults(results),
+    saveMachineSkills(skills), saveMachineSkillDetails(details)
+  ]);
+
+  const weeklyKeys = Object.keys(localStorage).filter(key =>
+    key.startsWith(`${STORAGE_KEYS.schedule}:`) || key.startsWith(`${STORAGE_KEYS.trainingLocations}:`)
+  );
+  for (const key of weeklyKeys) {
+    const stored = await decryptStoredItem(key, null);
+    if (!stored || typeof stored !== "object") continue;
+    let changed = false;
+    if (key.startsWith(`${STORAGE_KEYS.schedule}:`) && Object.hasOwn(stored, previousName)) {
+      stored[nextName] = stored[previousName];
+      delete stored[previousName];
+      changed = true;
+    }
+    if (key.startsWith(`${STORAGE_KEYS.trainingLocations}:`)) {
+      Object.values(stored).forEach(days => Object.keys(days || {}).forEach(day => {
+        if (days[day] === previousName) { days[day] = nextName; changed = true; }
+      }));
+    }
+    if (changed) await encryptStoredItem(key, stored);
+  }
+}
+
+async function getWorkItemUsageCount(name) {
+  let count = 0;
+  const keys = Object.keys(localStorage).filter(key => key.startsWith(`${STORAGE_KEYS.schedule}:`));
+  for (const key of keys) {
+    const stored = await dataStore.get(key, {});
+    count += Object.values(stored?.[name] || {}).filter(Boolean).length;
+  }
+  return count;
+}
+
+function chooseWorkItemReplacement(item, usageCount) {
+  return new Promise(resolve => {
+    const candidates = customWorkItems.filter(entry => entry.id !== item.id && entry.enabled && entry.showInSchema);
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `<section class="replacement-modal"><h3>${escapeHtml(item.name)} används i schemat</h3><p>${usageCount} sparade placeringar är kopplade till posten. Välj en ersättare innan den tas bort, eller pausa den i stället.</p><label>Ersätt med<select><option value="">Välj ersättare</option>${candidates.map(entry => `<option value="${entry.id}">${escapeHtml(entry.name)}</option>`).join("")}</select></label><div><button class="btn" data-action="cancel" type="button">Avbryt</button><button class="btn" data-action="pause" type="button">Pausa i stället</button><button class="btn danger" data-action="replace" type="button" disabled>Ersätt och ta bort</button></div></section>`;
+    document.body.appendChild(overlay);
+    const select = overlay.querySelector("select"), replace = overlay.querySelector('[data-action="replace"]');
+    select.addEventListener("change", () => { replace.disabled = !select.value; });
+    overlay.querySelector('[data-action="cancel"]').addEventListener("click", () => { overlay.remove(); resolve(null); });
+    overlay.querySelector('[data-action="pause"]').addEventListener("click", () => { overlay.remove(); resolve({ action: "pause" }); });
+    replace.addEventListener("click", () => { const replacement = candidates.find(entry => entry.id === select.value); overlay.remove(); resolve(replacement ? { action: "replace", replacement } : null); });
+  });
+}
+
+async function syncWorkItemCompetency(item, previousItem = null) {
+  const departments = await getDepartments();
+  let next = [...departments];
+  if (previousItem?.name && previousItem.name !== item.name) {
+    next = next.map(value => value === previousItem.name ? item.name : value);
+  }
+  const shouldShow = item.enabled && item.showInCompetency;
+  const contains = next.some(value => value.toLocaleLowerCase() === item.name.toLocaleLowerCase());
+  if (shouldShow && !contains) next.push(item.name);
+  if (!shouldShow) next = next.filter(value => value !== item.name);
+  await saveDepartments([...new Set(next)]);
+}
+
+async function setupWorkItemManager() {
+  const form = document.getElementById("workItemForm");
+  const nameInput = document.getElementById("workItemName");
+  const afterSelect = document.getElementById("workItemAfter");
+  const schemaCheckbox = document.getElementById("workItemSchema");
+  const competencyCheckbox = document.getElementById("workItemCompetency");
+  const autoScheduleCheckbox = document.getElementById("workItemAutoSchedule");
+  const typeSelect = document.getElementById("workItemType");
+  const staffCountInput = document.getElementById("workItemStaffCount");
+  const requiredSkillsInput = document.getElementById("workItemRequiredSkills");
+  const cancelButton = document.getElementById("cancelWorkItemEdit");
+  const saveButton = document.getElementById("saveWorkItemBtn");
+  const message = document.getElementById("workItemMessage");
+  const list = document.getElementById("workItemList");
+  const trashList = document.getElementById("workItemTrashList");
+  const trashCount = document.getElementById("workItemTrashCount");
+  if (!form || !nameInput || !afterSelect || !list) return;
+  let editingId = "";
+
+  const showMessage = (text, type = "success") => {
+    message.textContent = text;
+    message.className = `inline-message ${type}`;
+  };
+  const resetEditor = () => {
+    editingId = "";
+    form.reset();
+    schemaCheckbox.checked = true;
+    competencyCheckbox.checked = true;
+    autoScheduleCheckbox.checked = false;
+    if (typeSelect) typeSelect.value = "machine";
+    if (staffCountInput) staffCountInput.value = "1";
+    if (requiredSkillsInput) requiredSkillsInput.value = "";
+    cancelButton?.classList.add("hidden");
+    if (saveButton) saveButton.textContent = "+ Lägg till";
+  };
+  const startEdit = item => {
+    editingId = item.id;
+    nameInput.value = item.name;
+    afterSelect.value = TASKS.includes(item.after) ? item.after : "Packa L4";
+    schemaCheckbox.checked = item.showInSchema;
+    competencyCheckbox.checked = item.showInCompetency;
+    autoScheduleCheckbox.checked = item.autoSchedule;
+    if (typeSelect) typeSelect.value = item.type || "machine";
+    if (staffCountInput) staffCountInput.value = String(item.staffCount || 1);
+    if (requiredSkillsInput) requiredSkillsInput.value = (item.requiredSkills || []).join(", ");
+    cancelButton?.classList.remove("hidden");
+    if (saveButton) saveButton.textContent = "Spara ändringar";
+    nameInput.focus();
+    form.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  const renderManager = async () => {
+    const previousValue = afterSelect.value;
+    afterSelect.innerHTML = TASKS.filter(task => !editingId || customWorkItems.find(item => item.id === editingId)?.name !== task)
+      .map(task => `<option value="${escapeHtml(task)}">${escapeHtml(task)}</option>`).join("");
+    afterSelect.value = [...afterSelect.options].some(option => option.value === previousValue) ? previousValue : "Packa L4";
+    list.innerHTML = customWorkItems.length ? customWorkItems.map((item, index) => `
+      <article class="work-item-row${item.enabled ? "" : " is-disabled"}">
+        <div><strong>${escapeHtml(item.name)}</strong><span>${({ machine: "Maskin", department: "Avdelning", training: "Utbildning", extra: "Extra person" })[item.type] || "Maskin"} · ${item.staffCount || 1} person${Number(item.staffCount) === 1 ? "" : "er"}${item.requiredSkills?.length ? ` · Kräver ${escapeHtml(item.requiredSkills.join(", "))}` : ""}</span><span>${item.showInSchema ? `Schema · efter ${escapeHtml(item.after || "Packa L4")}` : "Inte i Schema"}${item.showInCompetency ? " · Kompetens · Testresultat" : ""}${item.autoSchedule ? " · Autoschema" : ""}</span>${item.enabled ? "" : '<span class="work-item-row-status">Pausad</span>'}</div>
+        <div class="work-item-row-actions">
+          <button class="btn" type="button" data-move-work-item="${item.id}" data-direction="-1"${index === 0 ? " disabled" : ""} aria-label="Flytta upp">↑</button>
+          <button class="btn" type="button" data-move-work-item="${item.id}" data-direction="1"${index === customWorkItems.length - 1 ? " disabled" : ""} aria-label="Flytta ner">↓</button>
+          <button class="btn" type="button" data-edit-work-item="${item.id}">Redigera</button>
+          <button class="btn" type="button" data-toggle-work-item="${item.id}">${item.enabled ? "Pausa" : "Aktivera"}</button>
+          <button class="btn danger" type="button" data-trash-work-item="${item.id}">Ta bort</button>
+        </div>
+      </article>`).join("") : '<div class="empty-state">Inga egna maskiner eller avdelningar har lagts till.</div>';
+
+    const trash = await getWorkItemTrash();
+    if (trashCount) trashCount.textContent = String(trash.length);
+    if (trashList) trashList.innerHTML = trash.length ? trash.map(item => `
+      <article class="work-item-row"><div><strong>${escapeHtml(item.name)}</strong><span>Borttagen ${new Date(item.deletedAt || Date.now()).toLocaleDateString("sv-SE")}</span></div><div class="work-item-row-actions"><button class="btn" type="button" data-restore-work-item="${item.id}">Återställ</button></div></article>`).join("") : '<div class="empty-state">Papperskorgen är tom.</div>';
+
+    list.querySelectorAll("[data-edit-work-item]").forEach(button => button.addEventListener("click", () => {
+      const item = customWorkItems.find(entry => entry.id === button.dataset.editWorkItem);
+      if (item) startEdit(item);
+    }));
+    list.querySelectorAll("[data-move-work-item]").forEach(button => button.addEventListener("click", async () => {
+      const index = customWorkItems.findIndex(entry => entry.id === button.dataset.moveWorkItem);
+      const target = index + Number(button.dataset.direction);
+      if (index < 0 || target < 0 || target >= customWorkItems.length) return;
+      const next = [...customWorkItems];
+      [next[index], next[target]] = [next[target], next[index]];
+      await saveCustomWorkItems(next);
+      showMessage("Ordningen har sparats.");
+      await renderManager();
+    }));
+    list.querySelectorAll("[data-toggle-work-item]").forEach(button => button.addEventListener("click", async () => {
+      const item = customWorkItems.find(entry => entry.id === button.dataset.toggleWorkItem);
+      if (!item) return;
+      const updated = { ...item, enabled: !item.enabled, updatedAt: new Date().toISOString() };
+      await saveCustomWorkItems(customWorkItems.map(entry => entry.id === item.id ? updated : entry));
+      await syncWorkItemCompetency(updated, item);
+      await addAuditEvent("department", `${item.name} ${updated.enabled ? "aktiverad" : "pausad"}`, "Inställning ändrad");
+      showMessage(updated.enabled ? `${item.name} är aktiv igen.` : `${item.name} har pausats. Befintlig data finns kvar.`);
+      await renderManager();
+    }));
+    list.querySelectorAll("[data-trash-work-item]").forEach(button => button.addEventListener("click", async () => {
+      const item = customWorkItems.find(entry => entry.id === button.dataset.trashWorkItem);
+      if (!item) return;
+      const usageCount = await getWorkItemUsageCount(item.name);
+      if (usageCount) {
+        const choice = await chooseWorkItemReplacement(item, usageCount);
+        if (!choice) return;
+        if (choice.action === "pause") {
+          const updated = { ...item, enabled: false, updatedAt: new Date().toISOString() };
+          await saveCustomWorkItems(customWorkItems.map(entry => entry.id === item.id ? updated : entry));
+          await syncWorkItemCompetency(updated, item); showMessage(`${item.name} pausades och historiken finns kvar.`); await renderManager(); return;
+        }
+        await createWorkItemSafetySnapshot(`${item.name} ersätts med ${choice.replacement.name}`);
+        await renameWorkItemReferences(item.name, choice.replacement.name);
+      } else if (!confirm(`Flytta ${item.name} till papperskorgen? Befintlig historik sparas.`)) return;
+      await createWorkItemSafetySnapshot(`${item.name} flyttas till papperskorgen`);
+      const trashItems = await getWorkItemTrash();
+      await saveWorkItemTrash([{ ...item, deletedAt: new Date().toISOString() }, ...trashItems]);
+      await saveCustomWorkItems(customWorkItems.filter(entry => entry.id !== item.id));
+      await syncWorkItemCompetency({ ...item, enabled: false }, item);
+      if (editingId === item.id) resetEditor();
+      await addAuditEvent("department", `${item.name} flyttad till papperskorgen`, "Kan återställas");
+      showMessage(`${item.name} flyttades till papperskorgen.`);
+      await renderManager();
+    }));
+    trashList?.querySelectorAll("[data-restore-work-item]").forEach(button => button.addEventListener("click", async () => {
+      const trashItems = await getWorkItemTrash();
+      const item = trashItems.find(entry => entry.id === button.dataset.restoreWorkItem);
+      if (!item) return;
+      const restored = { ...item, enabled: true, updatedAt: new Date().toISOString() };
+      delete restored.deletedAt;
+      await saveCustomWorkItems([...customWorkItems, restored]);
+      await saveWorkItemTrash(trashItems.filter(entry => entry.id !== item.id));
+      await syncWorkItemCompetency(restored);
+      await addAuditEvent("department", `${item.name} återställd`, "Från papperskorgen");
+      showMessage(`${item.name} har återställts.`);
+      await renderManager();
+    }));
+  };
+
+  bindOnce(cancelButton, "click", resetEditor);
+  bindOnce(form, "submit", async event => {
+    event.preventDefault();
+    const name = nameInput.value.trim();
+    const previousItem = customWorkItems.find(item => item.id === editingId) || null;
+    const showInSchema = schemaCheckbox.checked;
+    const showInCompetency = competencyCheckbox.checked;
+    const autoSchedule = autoScheduleCheckbox.checked;
+    const type = typeSelect?.value || "machine";
+    const staffCount = Math.max(1, Math.min(20, Number(staffCountInput?.value) || 1));
+    const requiredSkills = [...new Set((requiredSkillsInput?.value || "").split(",").map(value => value.trim()).filter(Boolean))];
+    if (!name || (!showInSchema && !showInCompetency)) return showMessage("Ange ett namn och välj minst en sida.", "error");
+    const duplicate = TASKS.some(task => task.toLocaleLowerCase() === name.toLocaleLowerCase() && task !== previousItem?.name) ||
+      customWorkItems.some(item => item.id !== editingId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    if (duplicate) return showMessage("Namnet finns redan.", "error");
+    if (autoSchedule && (!showInSchema || !showInCompetency)) return showMessage("Autoschema kräver att både Schema och Kompetens är valda.", "error");
+    const now = new Date().toISOString();
+    const item = previousItem ? { ...previousItem, name, after: afterSelect.value || "Packa L4", type, staffCount, requiredSkills, showInSchema, showInCompetency, autoSchedule, updatedAt: now }
+      : { id: makeId(), name, after: afterSelect.value || "Packa L4", type, staffCount, requiredSkills, showInSchema, showInCompetency, autoSchedule, enabled: true, createdAt: now, updatedAt: now };
+    if (previousItem && previousItem.name !== name) {
+      await createWorkItemSafetySnapshot(`${previousItem.name} byter namn till ${name}`);
+      await renameWorkItemReferences(previousItem.name, name);
+    }
+    const nextItems = previousItem ? customWorkItems.map(entry => entry.id === item.id ? item : { ...entry, after: entry.after === previousItem.name ? name : entry.after }) : [...customWorkItems, item];
+    await saveCustomWorkItems(nextItems);
+    await syncWorkItemCompetency(item, previousItem);
+    await addAuditEvent("department", `${name} ${previousItem ? "uppdaterad" : "tillagd"}`, [showInSchema ? "Schema" : "", showInCompetency ? "Kompetens och Testresultat" : ""].filter(Boolean).join(" · "));
+    resetEditor();
+    showMessage(`${name} har ${previousItem ? "uppdaterats" : "lagts till"}.`);
+    await renderManager();
+  });
+  await renderManager();
+}
+
 function initializeAppContent() {
   cleanupOldWeeklyData();
   enhanceAppShell();
@@ -4254,10 +4895,14 @@ function initializeAppContent() {
   void renderDashboard();
   void renderProduction();
   void renderTodoList();
+  void renderSettings();
+  renderHelpPage();
   setupAddForm();
   void setupWorkItemManager();
   setupAutoSchedule();
   setupShareSchedule();
+  setupAutoLock();
+  void setupOnboarding();
   setupMobileNavigation();
   setupFilterControls();
   setupTodoPage();
@@ -4276,7 +4921,9 @@ async function openAppUI() {
     await setupAuthUI();
   });
 
+  await loadAppSettings();
   await loadCustomWorkItems();
+  await createAutomaticBackupIfNeeded();
   initializeAppContent();
 }
 
