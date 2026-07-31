@@ -699,9 +699,11 @@ async function createFairWeeklySchedule(priorityLines) {
     extraPersonLocations,
     assignmentCount,
     unfilledCount,
-    message: unfilledCount
+    message: `${unfilledCount
       ? `Schemat skapades med ${assignmentCount} placeringar. ${unfilledCount} platser saknar behörig personal.`
-      : `Veckoschemat är klart med ${assignmentCount} rättvist fördelade placeringar.`
+      : `Veckoschemat är klart med ${assignmentCount} rättvist fördelade placeringar.`}${ignoredTasks.length
+      ? ` Kontrollerades inte: ${ignoredTasks.join(", ")}. De saknas bland aktiva schemarader.`
+      : ""}`
   };
 }
 
@@ -740,6 +742,7 @@ function showSchedulePreview(result, people, options = {}) {
       <div class="schedule-preview-grid"><div class="preview-task preview-header">Uppgift</div>${DAYS.map((day, index) => `<div class="preview-header"><strong>${escapeHtml(day)}</strong><small>${escapeHtml(dates[index])}</small></div>`).join("")}${rows}</div>
       <div class="preview-actions">${isShareView ? '<button type="button" class="btn primary preview-save">Stäng</button>' : '<button type="button" class="btn preview-cancel">Avbryt</button><button type="button" class="btn primary preview-save">Spara schema</button>'}</div>
     `;
+    modal.style.setProperty("--schedule-day-count", String(DAYS.length));
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
     const close = accepted => { overlay.remove(); resolve(accepted); };
@@ -1268,7 +1271,7 @@ async function changeAppPassword(nextPassword) {
   await createAutomaticBackupIfNeeded();
 }
 
-// واجهة التخزين الوحيدة التي تحتاج لاحقاً إلى الاستبدال عند إضافة API أو قاعدة بيانات.
+// Central storage adapter. Replace this layer if an API or database is added later.
 const dataStore = {
   async get(key, fallback = null) { return decryptStoredItem(key, fallback); },
   async set(key, value) { return encryptStoredItem(key, value); },
@@ -1279,6 +1282,22 @@ const dataStore = {
 async function loadAppSettings() {
   const stored = await dataStore.get(STORAGE_KEYS.appSettings, {});
   appSettings = { ...DEFAULT_APP_SETTINGS, ...(stored || {}) };
+  appSettings.productionMachines = Array.isArray(appSettings.productionMachines)
+    ? appSettings.productionMachines.filter(value => typeof value === "string" && value.trim())
+    : [...DEFAULT_APP_SETTINGS.productionMachines];
+  appSettings.breakLines = Array.isArray(appSettings.breakLines)
+    ? appSettings.breakLines.filter(line =>
+      line && typeof line.id === "string" && line.id.trim() &&
+      typeof line.label === "string" && line.label.trim() &&
+      Array.isArray(line.workplaces) && line.workplaces.some(Boolean)
+    ).map(line => ({
+      id: line.id.trim(),
+      label: line.label.trim(),
+      workplaces: [...new Set(line.workplaces.filter(value => typeof value === "string" && value.trim()).map(value => value.trim()))]
+    }))
+    : structuredClone(DEFAULT_APP_SETTINGS.breakLines);
+  if (!appSettings.breakLines.length) appSettings.breakLines = structuredClone(DEFAULT_APP_SETTINGS.breakLines);
+  appSettings.autoLockMinutes = Math.max(0, Number(appSettings.autoLockMinutes) || 0);
   appSettings.extraAssignments = [...new Set([
     ...BREAK_EXTRA_ASSIGNMENT_PRIORITY,
     ...(Array.isArray(appSettings.extraAssignments) ? appSettings.extraAssignments : [])
@@ -2026,7 +2045,7 @@ async function renderSettings() {
 function renderHelpPage() {
   const root = document.getElementById("helpPage");
   if (!root) return;
-  root.innerHTML = `<section class="card help-intro"><div><h3>Kom igång</h3><p>All data sparas krypterat på den här enheten. Exportera backup regelbundet.</p></div><a class="btn primary" href="installningar.html">Öppna inställningar</a></section><div class="help-grid"><article class="card"><span>1</span><h3>Lägg till personal</h3><p>Öppna Lägg till, registrera namn och företag. Tillgänglighet ändras på personalsidan.</p></article><article class="card"><span>2</span><h3>Bygg arbetsplatser</h3><p>Lägg till maskiner, avdelningar, utbildningar och extraplatser. De kan pausas och ordnas.</p></article><article class="card"><span>3</span><h3>Skapa schema</h3><p>Välj personal, dra placeringar mellan rutor, kopiera dagar eller använd en sparad veckomall.</p></article><article class="card"><span>4</span><h3>Kontrollera varningar</h3><p>Röda rutor saknar bemanning. Inaktiva eller obehöriga personer visar orsaken direkt.</p></article><article class="card"><span>5</span><h3>Säkerhetskopiera</h3><p>Exportera en krypterad backup från Översikt eller Inställningar innan större förändringar.</p></article><article class="card"><span>6</span><h3>Installera</h3><p>I webbläsarens meny kan appen installeras på datorn när PWA-stödet är aktiverat.</p></article></div><section class="card help-feedback"><div><h3>Förslag eller problem?</h3><p>Skicka feedback till den adress som angetts i Inställningar.</p></div>${appSettings.feedbackEmail ? `<a class="btn" href="mailto:${escapeHtml(appSettings.feedbackEmail)}?subject=Staff%20Planner%20feedback">Skicka feedback</a>` : '<a class="btn" href="installningar.html">Ange feedbackadress</a>'}</section>`;
+  root.innerHTML = `<section class="card help-intro"><div><h3>Kom igång</h3><p>All data sparas krypterat på den här enheten. Exportera backup regelbundet.</p></div><a class="btn primary" href="installningar.html">Öppna inställningar</a></section><div class="help-grid"><article class="card"><span>1</span><h3>Lägg till personal</h3><p>Öppna Lägg till, registrera namn och företag. Tillgänglighet ändras på personalsidan.</p></article><article class="card"><span>2</span><h3>Bygg arbetsplatser</h3><p>Lägg till maskiner, avdelningar, utbildningar och extraplatser. De kan pausas och ordnas.</p></article><article class="card"><span>3</span><h3>Skapa schema</h3><p>Välj personer i listorna. Du kan också kopiera en dag eller använda en sparad veckomall.</p></article><article class="card"><span>4</span><h3>Kontrollera varningar</h3><p>Röda rutor saknar bemanning. Inaktiva eller obehöriga personer visar orsaken direkt.</p></article><article class="card"><span>5</span><h3>Säkerhetskopiera</h3><p>Exportera en krypterad backup från Översikt eller Inställningar innan större förändringar.</p></article><article class="card"><span>6</span><h3>Installera</h3><p>I webbläsarens meny kan appen installeras på datorn när PWA-stödet är aktiverat.</p></article></div><section class="card help-feedback"><div><h3>Förslag eller problem?</h3><p>Skicka feedback till den adress som angetts i Inställningar.</p></div>${appSettings.feedbackEmail ? `<a class="btn" href="mailto:${escapeHtml(appSettings.feedbackEmail)}?subject=Staff%20Planner%20feedback">Skicka feedback</a>` : '<a class="btn" href="installningar.html">Ange feedbackadress</a>'}</section>`;
 }
 
 async function setupOnboarding() {
@@ -3120,31 +3139,10 @@ async function renderScheduleTools(schedule, people = [], skills = {}) {
   });
 }
 
-function bindScheduleDragAndDrop(root, schedule) {
-  root.querySelectorAll('.cell[data-task][data-day][data-simple="true"]').forEach(cell => {
-    const { task, day } = cell.dataset;
-    if (schedule?.[task]?.[day]) cell.draggable = true;
-    cell.addEventListener("dragstart", event => { event.dataTransfer.setData("text/plain", JSON.stringify({ task, day })); cell.classList.add("is-dragging"); });
-    cell.addEventListener("dragend", () => cell.classList.remove("is-dragging"));
-    cell.addEventListener("dragover", event => { event.preventDefault(); cell.classList.add("is-drop-target"); });
-    cell.addEventListener("dragleave", () => cell.classList.remove("is-drop-target"));
-    cell.addEventListener("drop", async event => {
-      event.preventDefault(); cell.classList.remove("is-drop-target");
-      let source; try { source = JSON.parse(event.dataTransfer.getData("text/plain")); } catch { return; }
-      if (!source?.task || !source?.day || (source.task === task && source.day === day)) return;
-      recordScheduleHistory(schedule);
-      const sourceValue = schedule[source.task]?.[source.day] || "";
-      const targetValue = schedule[task]?.[day] || "";
-      schedule[source.task][source.day] = targetValue;
-      schedule[task] ??= {}; schedule[task][day] = sourceValue;
-      await saveSchedule(schedule); showAppToast("Placeringen flyttades och sparades."); await renderSchedule();
-    });
-  });
-}
-
 async function renderSchedule() {
   const root = document.getElementById("scheduleGrid");
   if (!root) return;
+  root.style.setProperty("--schedule-day-count", String(DAYS.length));
   if (!Array.isArray(TASKS) || !TASKS.length) applyCustomWorkItems(customWorkItems);
 
   const [people, schedule, trainingLeaders, trainingLocations, extraPersonLocations, skills, restrictions] =
@@ -3217,7 +3215,6 @@ async function renderSchedule() {
         : isExtraTask ? "cell extra-person-cell" : "cell";
       cell.dataset.task = task;
       cell.dataset.day = day;
-      cell.dataset.simple = String(!isTrainingTask && !isExtraTask);
       if (!selectedPersonId && !isTrainingTask && !isExtraTask) {
         cell.classList.add("schedule-shortage");
         cell.title = `${task} saknar bemanning ${day}`;
@@ -3520,8 +3517,6 @@ async function renderSchedule() {
       root.appendChild(cell);
     });
   });
-
-  bindScheduleDragAndDrop(root, schedule);
 
   const card = root.parentElement;
   let historyNotice = card?.querySelector(".schedule-history-notice");
@@ -4599,100 +4594,6 @@ function setupAddForm() {
     form.reset();
     clearAddSuccessMessage(message);
   });
-}
-
-async function setupWorkItemManagerLegacy() {
-  const form = document.getElementById("workItemForm");
-  const nameInput = document.getElementById("workItemName");
-  const afterSelect = document.getElementById("workItemAfter");
-  const schemaCheckbox = document.getElementById("workItemSchema");
-  const competencyCheckbox = document.getElementById("workItemCompetency");
-  const autoScheduleCheckbox = document.getElementById("workItemAutoSchedule");
-  const message = document.getElementById("workItemMessage");
-  const list = document.getElementById("workItemList");
-  if (!form || !nameInput || !afterSelect || !list) return;
-
-  const renderManager = () => {
-    const previousValue = afterSelect.value;
-    afterSelect.innerHTML = TASKS.map(task => `<option value="${escapeHtml(task)}">${escapeHtml(task)}</option>`).join("");
-    afterSelect.value = TASKS.includes(previousValue) ? previousValue : "Packa L4";
-    list.innerHTML = customWorkItems.length
-      ? customWorkItems.map(item => `
-        <article class="work-item-row">
-          <div><strong>${escapeHtml(item.name)}</strong><span>${item.showInSchema ? `Schema · efter ${escapeHtml(item.after || "Packa L4")}` : "Inte i Schema"}${item.showInCompetency ? " · Kompetens · Testresultat" : ""}${item.autoSchedule ? " · Autoschema" : ""}</span></div>
-          <button class="btn danger" type="button" data-remove-work-item="${escapeHtml(item.id)}">Ta bort</button>
-        </article>
-      `).join("")
-      : '<div class="empty-state">Inga egna maskiner eller avdelningar har lagts till.</div>';
-
-    list.querySelectorAll("[data-remove-work-item]").forEach(button => {
-      button.addEventListener("click", async () => {
-        const item = customWorkItems.find(entry => entry.id === button.dataset.removeWorkItem);
-        if (!item || !confirm(`Vill du ta bort ${item.name} från systemets listor?`)) return;
-        const nextItems = customWorkItems.filter(entry => entry.id !== item.id);
-        await saveCustomWorkItems(nextItems);
-        if (item.showInCompetency) {
-          const [departments, results, skills, details] = await Promise.all([
-            getDepartments(), getTestResults(), getMachineSkills(), getMachineSkillDetails()
-          ]);
-          Object.values(results).forEach(personResults => { if (personResults) delete personResults[item.name]; });
-          Object.keys(skills).forEach(personId => {
-            if (Array.isArray(skills[personId])) skills[personId] = skills[personId].filter(value => value !== item.name);
-          });
-          Object.values(details).forEach(personDetails => { if (personDetails) delete personDetails[item.name]; });
-          await Promise.all([
-            saveDepartments(departments.filter(value => value !== item.name)),
-            saveTestResults(results), saveMachineSkills(skills), saveMachineSkillDetails(details)
-          ]);
-        }
-        await addAuditEvent("department", `${item.name} borttagen`, "Egen maskin eller avdelning");
-        renderManager();
-      });
-    });
-  };
-
-  bindOnce(form, "submit", async event => {
-    event.preventDefault();
-    const name = nameInput.value.trim();
-    const showInSchema = schemaCheckbox.checked;
-    const showInCompetency = competencyCheckbox.checked;
-    const autoSchedule = autoScheduleCheckbox.checked;
-    if (!name || (!showInSchema && !showInCompetency)) {
-      message.textContent = "Ange ett namn och välj minst en sida.";
-      message.className = "inline-message error";
-      return;
-    }
-    if (TASKS.some(task => task.toLocaleLowerCase() === name.toLocaleLowerCase()) ||
-        customWorkItems.some(item => item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-      message.textContent = "Namnet finns redan.";
-      message.className = "inline-message error";
-      return;
-    }
-    if (autoSchedule && (!showInSchema || !showInCompetency)) {
-      message.textContent = "Autoschema kräver att både Schema och Kompetens är valda.";
-      message.className = "inline-message error";
-      return;
-    }
-    const item = { id: makeId(), name, after: afterSelect.value || "Packa L4", showInSchema, showInCompetency, autoSchedule };
-    await saveCustomWorkItems([...customWorkItems, item]);
-    if (showInCompetency) {
-      const departments = await getDepartments();
-      if (!departments.some(value => value.toLocaleLowerCase() === name.toLocaleLowerCase())) {
-        departments.push(name);
-        await saveDepartments(departments);
-      }
-    }
-    await addAuditEvent("department", `${name} tillagd`, [showInSchema ? "Schema" : "", showInCompetency ? "Kompetens och Testresultat" : ""].filter(Boolean).join(" · "));
-    form.reset();
-    schemaCheckbox.checked = true;
-    competencyCheckbox.checked = true;
-    autoScheduleCheckbox.checked = false;
-    message.textContent = `${name} har lagts till.`;
-    message.className = "inline-message success";
-    renderManager();
-  });
-
-  renderManager();
 }
 
 async function renameWorkItemReferences(previousName, nextName) {
