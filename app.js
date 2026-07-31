@@ -41,8 +41,10 @@ let BREAK_WORKPLACE_DISPLAY_ORDER = [
 let EXTRA_PERSON_ASSIGNMENTS = [
   "Lock & dosor",
   "GD-rummet",
+  "ETIKETT-rummet",
   "Hjälp till på packavdelningen"
 ];
+const BREAK_EXTRA_ASSIGNMENT_PRIORITY = ["GD-rummet", "Lock & dosor", "ETIKETT-rummet"];
 
 const BASIC_ASSESSMENT_ITEMS = [
   "Punktlig och pålitlig",
@@ -112,7 +114,7 @@ const DEFAULT_APP_SETTINGS = {
   organizationName: "",
   feedbackEmail: "",
   productionMachines: ["GD1", "GD2", "GD3", "GD4"],
-  extraAssignments: ["Lock & dosor", "GD-rummet", "Hjälp till på packavdelningen"],
+  extraAssignments: ["GD-rummet", "Lock & dosor", "ETIKETT-rummet", "Hjälp till på packavdelningen"],
   breakLines: [
     { id: "GD1", label: "Linje 1", workplaces: ["GD1", "ETIKETTO", "Packa L1"] },
     { id: "GD2", label: "Linje 2", workplaces: ["GD2", "Logimark", "Packa L2/3"] },
@@ -162,6 +164,7 @@ let autoLockTimeoutId = null;
 const scheduleUndoStack = [];
 const scheduleRedoStack = [];
 const scheduleFilters = { company: "", availability: "all", skill: "" };
+let scheduleAdvancedToolsOpen = false;
 
 function showAppToast(text, type = "success") {
   let toast = document.getElementById("appToast");
@@ -540,10 +543,13 @@ async function createFairWeeklySchedule(priorityLines) {
   const availablePeople = people.filter(
     person => getPersonAvailability(person) === "available"
   );
-  const productionTasks = [...new Set([
-    ...getRequiredBreakWorkplaces(priorityLines),
-    ...customWorkItems.filter(item => item.showInSchema && item.autoSchedule).map(item => item.name)
-  ])];
+  const requestedTasks = priorityLines.flatMap(choice =>
+    Object.hasOwn(BREAK_LINE_WORKPLACES, choice) ? BREAK_LINE_WORKPLACES[choice] : [choice]
+  );
+  const productionTasks = [...new Set(
+    requestedTasks.filter(task => TASKS.includes(task) && !isTrainingTaskName(task) && !isExtraPersonTask(task))
+  )];
+  const ignoredTasks = [...new Set(requestedTasks.filter(task => !TASKS.includes(task)))];
   if (!productionTasks.length) {
     return { ok: false, message: "Välj minst en linje som ska köras först." };
   }
@@ -642,6 +648,7 @@ async function createFairWeeklySchedule(priorityLines) {
         return;
       }
 
+      schedule[task] ??= {};
       schedule[task][day] = selectedPerson.id;
       assignedToday.add(selectedPerson.id);
       const personStats = stats[selectedPerson.id];
@@ -675,6 +682,8 @@ async function createFairWeeklySchedule(priorityLines) {
             ((secondStats.order - dayIndex - extraIndex + availablePeople.length * 3) % availablePeople.length);
         })[0];
       if (!selectedPerson) return;
+      schedule[task] ??= {};
+      extraPersonLocations[task] ??= {};
       schedule[task][day] = selectedPerson.id;
       extraPersonLocations[task][day] = assignment;
       assignedToday.add(selectedPerson.id);
@@ -784,7 +793,8 @@ function setupAutoSchedule() {
     } catch (error) {
       console.error(error);
       if (message) {
-        message.textContent = "Det gick inte att skapa schemat. Försök igen.";
+        const technicalReason = error instanceof Error && error.message ? ` (${error.message})` : "";
+        message.textContent = `Det gick inte att skapa schemat${technicalReason}.`;
         message.className = "auto-schedule-message error";
       }
     } finally {
@@ -1187,6 +1197,38 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
   summary.append(heading, list);
 }
 
+function renderUnassignedPeopleSummary(scheduleRoot, people, schedule, trainingLeaders) {
+  const card = scheduleRoot.parentElement;
+  if (!card) return;
+  let summary = card.querySelector(".unassigned-summary");
+  if (!summary) {
+    summary = document.createElement("section");
+    summary.className = "unassigned-summary";
+    card.insertBefore(summary, scheduleRoot);
+  }
+  const availablePeople = people.filter(person => getPersonAvailability(person) === "available");
+  const days = DAYS.map(day => {
+    const occupied = getAssignedPeopleForDay(schedule, day);
+    getTrainingLeadersForDay(trainingLeaders, day).forEach(personId => occupied.add(personId));
+    return { day, people: availablePeople.filter(person => !occupied.has(person.id)) };
+  });
+  const total = days.reduce((sum, entry) => sum + entry.people.length, 0);
+  summary.classList.toggle("all-clear", total === 0);
+  summary.innerHTML = `
+    <div class="unassigned-summary-heading">
+      <div><strong>Personal utan placering</strong><span>Personer som är tillgängliga men ännu inte har någon uppgift.</span></div>
+      <b>${total}</b>
+    </div>
+    <div class="unassigned-days">
+      ${days.map(entry => `
+        <article class="${entry.people.length ? "has-unassigned" : ""}">
+          <div><strong>${escapeHtml(entry.day)}</strong><span>${entry.people.length ? `${entry.people.length} utan plats` : "Alla placerade"}</span></div>
+          <p>${entry.people.length ? entry.people.map(person => escapeHtml(person.name)).join(" · ") : "✓"}</p>
+        </article>
+      `).join("")}
+    </div>`;
+}
+
 function setupAutoLock() {
   const resetTimer = () => {
     clearTimeout(autoLockTimeoutId);
@@ -1237,6 +1279,10 @@ const dataStore = {
 async function loadAppSettings() {
   const stored = await dataStore.get(STORAGE_KEYS.appSettings, {});
   appSettings = { ...DEFAULT_APP_SETTINGS, ...(stored || {}) };
+  appSettings.extraAssignments = [...new Set([
+    ...BREAK_EXTRA_ASSIGNMENT_PRIORITY,
+    ...(Array.isArray(appSettings.extraAssignments) ? appSettings.extraAssignments : [])
+  ])];
   const selectedDays = ALL_DAYS.filter(day => appSettings.workDays?.includes(day));
   DAYS = selectedDays.length ? selectedDays : [...ALL_DAYS];
   EXTRA_PERSON_ASSIGNMENTS = [...appSettings.extraAssignments];
@@ -1247,6 +1293,10 @@ async function loadAppSettings() {
 
 async function saveAppSettings(nextSettings) {
   appSettings = { ...DEFAULT_APP_SETTINGS, ...nextSettings, workDays: ALL_DAYS.filter(day => nextSettings.workDays?.includes(day)) };
+  appSettings.extraAssignments = [...new Set([
+    ...BREAK_EXTRA_ASSIGNMENT_PRIORITY,
+    ...(Array.isArray(appSettings.extraAssignments) ? appSettings.extraAssignments : [])
+  ])];
   if (!appSettings.workDays.length) appSettings.workDays = [...ALL_DAYS];
   DAYS = [...appSettings.workDays];
   EXTRA_PERSON_ASSIGNMENTS = [...appSettings.extraAssignments];
@@ -1396,18 +1446,22 @@ async function renderSchedulePrioritySelector(scheduleRoot) {
   if (!panel) {
     panel = document.createElement("section");
     panel.className = "schedule-priority-panel";
-    card.insertBefore(panel, scheduleRoot);
+    card.insertBefore(panel, card.querySelector(".schedule-tools") || scheduleRoot);
   }
+  const choices = [
+    ...Object.entries(BREAK_LINE_LABELS).map(([value, label]) => ({ value, label, detail: (BREAK_LINE_WORKPLACES[value] || []).filter(task => TASKS.includes(task)).join(" · ") })),
+    ...customWorkItems.filter(item => item.enabled && item.showInSchema && item.autoSchedule).map(item => ({ value: item.name, label: item.name, detail: "Egen maskin / uppgift" }))
+  ];
   panel.innerHTML = `
     <div class="schedule-priority-heading">
       <div><strong>Vilka linjer ska köras?</strong><small>Välj linjer innan du skapar veckoschemat. Kopplade stationer tas med automatiskt.</small></div>
       <span>${selectedLines.length} valda</span>
     </div>
     <div class="break-priority-options">
-      ${Object.entries(BREAK_LINE_LABELS).map(([line, label]) => `
+      ${choices.map(choice => `
         <label class="break-priority-option">
-          <input type="checkbox" value="${line}"${selectedLines.includes(line) ? " checked" : ""} />
-          <span>${escapeHtml(label)}</span>
+          <input type="checkbox" value="${escapeHtml(choice.value)}"${selectedLines.includes(choice.value) ? " checked" : ""} />
+          <span><strong>${escapeHtml(choice.label)}</strong>${choice.detail ? `<small>${escapeHtml(choice.detail)}</small>` : ""}</span>
         </label>
       `).join("")}
     </div>
@@ -1707,14 +1761,22 @@ async function getSchedulePriorityLines() {
     getWeekStorageKey(STORAGE_KEYS.schedulePriorityLines),
     []
   );
+  const validChoices = new Set([
+    ...Object.keys(BREAK_LINE_WORKPLACES),
+    ...customWorkItems.filter(item => item.enabled && item.showInSchema && item.autoSchedule).map(item => item.name)
+  ]);
   return Array.isArray(lines)
-    ? lines.filter(line => Object.hasOwn(BREAK_LINE_WORKPLACES, line))
+    ? lines.filter(line => validChoices.has(line))
     : [];
 }
 
 async function saveSchedulePriorityLines(lines) {
+  const validChoices = new Set([
+    ...Object.keys(BREAK_LINE_WORKPLACES),
+    ...customWorkItems.filter(item => item.enabled && item.showInSchema && item.autoSchedule).map(item => item.name)
+  ]);
   const normalized = Array.isArray(lines)
-    ? lines.filter(line => Object.hasOwn(BREAK_LINE_WORKPLACES, line))
+    ? lines.filter(line => validChoices.has(line))
     : [];
   await encryptStoredItem(getWeekStorageKey(STORAGE_KEYS.schedulePriorityLines), normalized);
 }
@@ -1852,7 +1914,6 @@ function enhanceAppShell() {
   }
   const pageTips = {
     "dashboard.html": "Här finns senaste status, ändringshistorik och knappar för krypterad backup och återställning.",
-    "index.html": "Dra en bemannad ruta till en annan för att flytta eller byta placering. Röda rutor behöver kontrolleras.",
     "personal.html": "Använd status för sjukdom, semester eller annan frånvaro; schemat visar orsaken direkt.",
     "add.html": "Pausa en arbetsplats när den inte används. Då bevaras historiken och den kan aktiveras igen.",
     "maskiner.html": "Registrerad kompetens används för att varna och hjälpa autoschemat.",
@@ -2052,24 +2113,13 @@ function createAutomaticBreakGroups(
   day,
   skills,
   restrictions,
-  priorityLines,
-  extraPersonLocations
+  priorityLines
 ) {
   const groups = {};
   const workplaces = {};
   const scheduledWorkplaces = getScheduledWorkplaceByPerson(schedule, day);
   const unusedPeople = new Map(scheduledPeople.map((person, index) => [person.id, { person, index }]));
   const missing = [];
-  const scheduledExtras = TASKS.filter(isExtraPersonTask).map(task => {
-    const personId = schedule?.[task]?.[day];
-    return {
-      personId,
-      assignment: extraPersonLocations?.[task]?.[day] ||
-        (task === "Extra person 1" ? "GD-rummet" : "Lock & dosor")
-    };
-  }).filter(item => item.personId && unusedPeople.has(item.personId));
-  scheduledExtras.forEach(item => unusedPeople.delete(item.personId));
-
   const requiredWorkplaces = getRequiredBreakWorkplaces(priorityLines);
   requiredWorkplaces.forEach(workplace => {
     [1, 2].forEach(groupNumber => {
@@ -2099,10 +2149,6 @@ function createAutomaticBreakGroups(
 
   const extraPeople = [];
   const extraCandidatePool = new Map();
-  scheduledExtras.forEach(({ personId }) => {
-    const person = scheduledPeople.find(item => item.id === personId);
-    if (person) extraCandidatePool.set(person.id, { person });
-  });
   unusedPeople.forEach(value => extraCandidatePool.set(value.person.id, value));
   unusedPeople.clear();
 
@@ -2114,16 +2160,14 @@ function createAutomaticBreakGroups(
       .filter(([, group]) => group === groupNumber)
       .map(([personId]) => workplaces[personId])
       .filter(assignment => EXTRA_PERSON_ASSIGNMENTS.includes(assignment)));
-    let assignment = !groupAssignments.has("GD-rummet")
-      ? "GD-rummet"
-      : !groupAssignments.has("Lock & dosor") ? "Lock & dosor" : "";
+    let assignment = BREAK_EXTRA_ASSIGNMENT_PRIORITY.find(value => !groupAssignments.has(value)) || "";
     let candidate = [...extraCandidatePool.values()].find(({ person }) => {
       if (assignment !== "GD-rummet") return true;
       const personRestrictions = Array.isArray(restrictions[person.id]) ? restrictions[person.id] : [];
       return !personRestrictions.includes("GD");
     });
     if (!candidate && assignment === "GD-rummet") {
-      assignment = groupAssignments.has("Lock & dosor") ? "" : "Lock & dosor";
+      assignment = BREAK_EXTRA_ASSIGNMENT_PRIORITY.find(value => value !== "GD-rummet" && !groupAssignments.has(value)) || "";
       candidate = [...extraCandidatePool.values()][0];
     }
     if (!candidate) break;
@@ -2259,7 +2303,8 @@ async function renderBreakPlanner() {
   priorityHeading.className = "break-priority-heading";
   priorityHeading.innerHTML = `
     <strong>Vilka linjer har prioritet?</strong>
-    <small>Välj en eller flera linjer. Kopplade stationer tas med automatiskt.</small>
+    <small>Välj en eller flera linjer. Kopplade stationer bemannas först i båda grupperna.</small>
+    <small class="break-extra-priority-note">Därefter placeras extra personal i varje grupp: GD-rummet → Lock & dosor → ETIKETT-rummet.</small>
   `;
   priorityOptions.className = "break-priority-options";
   Object.entries(BREAK_LINE_LABELS).forEach(([line, label]) => {
@@ -2309,10 +2354,9 @@ async function renderBreakPlanner() {
   autoGroupsButton.addEventListener("click", async () => {
     autoGroupsButton.disabled = true;
     autoGroupsButton.textContent = "Skapar grupper…";
-    const [skills, restrictions, extraPersonLocations] = await Promise.all([
+    const [skills, restrictions] = await Promise.all([
       getMachineSkills(),
-      getMachineRestrictions(),
-      getExtraPersonLocations()
+      getMachineRestrictions()
     ]);
     const result = createAutomaticBreakGroups(
       scheduledPeople,
@@ -2320,8 +2364,7 @@ async function renderBreakPlanner() {
       selectedBreakDay,
       skills,
       restrictions,
-      dayPlan.priorityLines,
-      extraPersonLocations
+      dayPlan.priorityLines
     );
     const selectedLineNames = dayPlan.priorityLines
       .map(line => BREAK_LINE_LABELS[line])
@@ -3018,6 +3061,36 @@ async function renderScheduleTools(schedule, people = [], skills = {}) {
   tools.querySelector("#scheduleCompanyFilter").value = scheduleFilters.company;
   tools.querySelector("#scheduleAvailabilityFilter").value = scheduleFilters.availability;
   tools.querySelector("#scheduleSkillFilter").value = scheduleFilters.skill;
+  const filterTools = tools.querySelector(".schedule-filter-tools");
+  const filterLabels = filterTools.querySelectorAll("label");
+  filterLabels[0].firstChild.textContent = "Företag";
+  filterLabels[1].firstChild.textContent = "Närvaro";
+  filterLabels[2].firstChild.textContent = "Kan arbeta på";
+  filterTools.insertAdjacentHTML("afterbegin", '<div class="schedule-tools-heading"><strong>Vilka personer vill du se?</strong><small>Valet ändrar namnen som visas i maskinernas listor nedanför.</small></div>');
+  const clearFiltersButton = document.createElement("button");
+  clearFiltersButton.type = "button";
+  clearFiltersButton.className = "btn schedule-clear-filters";
+  clearFiltersButton.textContent = "Visa alla";
+  clearFiltersButton.addEventListener("click", async () => {
+    scheduleFilters.company = "";
+    scheduleFilters.availability = "all";
+    scheduleFilters.skill = "";
+    await renderSchedule();
+  });
+  filterTools.appendChild(clearFiltersButton);
+  const advancedToggle = document.createElement("button");
+  advancedToggle.type = "button";
+  advancedToggle.className = "btn schedule-advanced-toggle";
+  advancedToggle.setAttribute("aria-expanded", String(scheduleAdvancedToolsOpen));
+  advancedToggle.textContent = scheduleAdvancedToolsOpen ? "Dölj fler verktyg" : "Visa fler verktyg";
+  advancedToggle.addEventListener("click", async () => {
+    scheduleAdvancedToolsOpen = !scheduleAdvancedToolsOpen;
+    await renderScheduleTools(schedule, people, skills);
+  });
+  filterTools.insertAdjacentElement("afterend", advancedToggle);
+  tools.classList.toggle("show-advanced", scheduleAdvancedToolsOpen);
+  tools.querySelector(".schedule-copy-tools").insertAdjacentHTML("afterbegin", '<div class="schedule-tools-heading"><strong>Kopiera en dag</strong><small>Kopierar alla placeringar från en dag till en annan.</small></div>');
+  tools.querySelector(".schedule-template-tools").insertAdjacentHTML("afterbegin", '<div class="schedule-tools-heading"><strong>Veckomallar</strong><small>Spara eller återanvänd ett färdigt veckoschema.</small></div>');
   [["#scheduleCompanyFilter", "company"], ["#scheduleAvailabilityFilter", "availability"], ["#scheduleSkillFilter", "skill"]].forEach(([selector, key]) => tools.querySelector(selector).addEventListener("change", async event => { scheduleFilters[key] = event.target.value; await renderSchedule(); }));
   tools.querySelector("#copyScheduleDay").addEventListener("click", async () => {
     const from = tools.querySelector("#copyDayFrom").value, to = tools.querySelector("#copyDayTo").value;
@@ -3072,6 +3145,7 @@ function bindScheduleDragAndDrop(root, schedule) {
 async function renderSchedule() {
   const root = document.getElementById("scheduleGrid");
   if (!root) return;
+  if (!Array.isArray(TASKS) || !TASKS.length) applyCustomWorkItems(customWorkItems);
 
   const [people, schedule, trainingLeaders, trainingLocations, extraPersonLocations, skills, restrictions] =
     await Promise.all([
@@ -3088,6 +3162,7 @@ async function renderSchedule() {
   await renderScheduleTools(schedule, people, skills);
 
   renderAvailabilitySummary(root, people);
+  renderUnassignedPeopleSummary(root, people, schedule, trainingLeaders);
   renderTrainingScheduleSummary(root, people, schedule, trainingLocations);
   await renderSchedulePrioritySelector(root);
   root.innerHTML = "";

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Schema</title>
-  <link rel="stylesheet" href="style.css?v=20260731-3" />
+  <link rel="stylesheet" href="style.css?v=20260731-9" />
 </head>
 <body class="app-booting">
   <div id="authScreen" class="auth-screen">
@@ -76,6 +76,9 @@
       © 2026 Mizzar — Staff Planner
     </footer>
   </div>
-  <script src="app.js?v=20260731-3"></script>
+  <script>
+    if ("serviceWorker" in navigator) navigator.serviceWorker.getRegistrations().then(items => items.forEach(item => item.update()));
+  </script>
+  <script src="app.js?v=20260731-10"></script>
 </body>
 </html>
