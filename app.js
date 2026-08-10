@@ -3521,13 +3521,12 @@ async function renderSchedule() {
   const card = root.parentElement;
   let historyNotice = card?.querySelector(".schedule-history-notice");
   if (isViewingPreviousWeek()) {
-    root.querySelectorAll("select").forEach(select => { select.disabled = true; });
     if (!historyNotice && card) {
       historyNotice = document.createElement("div");
       historyNotice.className = "schedule-history-notice";
       card.insertBefore(historyNotice, root);
     }
-    if (historyNotice) historyNotice.textContent = "Visar förra veckans schema · Endast läsning";
+    if (historyNotice) historyNotice.textContent = "Visar förra veckans schema · Du kan redigera och spara ändringar";
   } else {
     historyNotice?.remove();
   }
