@@ -3641,11 +3641,13 @@ async function renderPeople() {
   }
 }
 
+const MAX_TEST_RESULT_SCORE = 3;
+
 function getTestResultClass(score) {
   if (score === "" || score === null || score === undefined) return "not-tested";
   const numericScore = Number(score);
-  if (numericScore >= 4) return "test-high";
-  if (numericScore >= 3) return "test-medium";
+  if (numericScore >= 3) return "test-high";
+  if (numericScore >= 2) return "test-medium";
   return "test-low";
 }
 
@@ -3834,29 +3836,32 @@ async function renderTestResults() {
       const scoreInput = document.createElement("input");
       const suffix = document.createElement("small");
       const storedScore = results[selectedPerson.id]?.[department] ?? "";
+      const displayedScore = storedScore === ""
+        ? ""
+        : Math.max(0, Math.min(MAX_TEST_RESULT_SCORE, Math.round(Number(storedScore))));
       field.className = "test-score-field";
       label.textContent = department;
-      inputWrap.className = `test-score-input ${getTestResultClass(storedScore)}`;
+      inputWrap.className = `test-score-input ${getTestResultClass(displayedScore)}`;
       scoreInput.type = "number";
       scoreInput.min = "0";
-      scoreInput.max = "5";
+      scoreInput.max = String(MAX_TEST_RESULT_SCORE);
       scoreInput.step = "1";
       scoreInput.inputMode = "numeric";
-      scoreInput.value = storedScore;
+      scoreInput.value = displayedScore;
       scoreInput.placeholder = "—";
       scoreInput.setAttribute("aria-label", `${selectedPerson.name}, ${department}`);
-      suffix.textContent = "/ 5";
+      suffix.textContent = `/ ${MAX_TEST_RESULT_SCORE}`;
 
       scoreInput.addEventListener("change", async () => {
         let value = scoreInput.value === "" ? "" : Math.round(Number(scoreInput.value));
-        if (value !== "") value = Math.max(0, Math.min(5, value));
+        if (value !== "") value = Math.max(0, Math.min(MAX_TEST_RESULT_SCORE, value));
         scoreInput.value = value;
         results[selectedPerson.id] ??= {};
         if (value === "") delete results[selectedPerson.id][department];
         else results[selectedPerson.id][department] = value;
         inputWrap.className = `test-score-input ${getTestResultClass(value)}`;
         await saveTestResults(results);
-        await addAuditEvent("test", `${selectedPerson.name}: ${department}`, value === "" ? "Resultat borttaget" : `Resultat ${value}/5`, { action: "test", personId: selectedPerson.id, department, value: storedScore });
+        await addAuditEvent("test", `${selectedPerson.name}: ${department}`, value === "" ? "Resultat borttaget" : `Resultat ${value}/${MAX_TEST_RESULT_SCORE}`, { action: "test", personId: selectedPerson.id, department, value: storedScore });
       });
 
       inputWrap.append(scoreInput, suffix);
