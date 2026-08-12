@@ -5001,6 +5001,14 @@ async function setupAuthUI() {
   bindEnterToClick(passwordConfirmInput, authBtn);
 }
 
+// Avoid flashing the login screen between pages while the saved session is
+// being verified. The script is loaded at the end of <body>, before first paint.
+try {
+  if (getStoredSessionPassword()) setAuthenticatedView(true);
+} catch (error) {
+  console.warn("Could not read the saved session:", error);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   void setupAuthUI().catch(error => {
     console.error("App startup failed:", error);
