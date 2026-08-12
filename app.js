@@ -956,6 +956,91 @@ function clearAuthMessage() {
   authMessage.classList.remove("error", "success");
 }
 
+function downloadRepairBackup() {
+  const data = {};
+  Object.keys(localStorage).forEach(key => {
+    if (isAppStorageKey(key)) data[key] = localStorage.getItem(key);
+  });
+  const blob = new Blob([JSON.stringify({
+    app: "Staff Planner",
+    type: "pre-repair-backup",
+    exportedAt: new Date().toISOString(),
+    data
+  }, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `staff-planner-before-repair-${formatDateKey(new Date())}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function repairLocalAppData() {
+  const removedKeys = [];
+  const encryptedKeys = Object.keys(localStorage).filter(key =>
+    isAppStorageKey(key) && key.includes("_enc")
+  );
+
+  for (const key of encryptedKeys) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+    try {
+      const payload = JSON.parse(raw);
+      if (typeof payload?.iv !== "string" || typeof payload?.data !== "string") {
+        throw new Error("Invalid encrypted payload");
+      }
+      if (appUnlocked && sessionKey) {
+        const value = await decryptJson(payload, sessionKey);
+        const mustBeArray = [STORAGE_KEYS.workItems, STORAGE_KEYS.automaticBackups];
+        if (mustBeArray.includes(key) && !Array.isArray(value)) {
+          throw new Error("Invalid stored collection");
+        }
+        if (key === STORAGE_KEYS.appSettings && (!value || typeof value !== "object" || Array.isArray(value))) {
+          throw new Error("Invalid settings");
+        }
+      }
+    } catch (error) {
+      console.error(`Removing damaged local record: ${key}`, error);
+      localStorage.removeItem(key);
+      removedKeys.push(key);
+    }
+  }
+
+  return removedKeys;
+}
+
+function showRepairDataButton() {
+  const actions = document.querySelector("#authScreen .actions");
+  if (!actions || document.getElementById("repairDataBtn")) return;
+  const button = document.createElement("button");
+  button.id = "repairDataBtn";
+  button.className = "btn";
+  button.type = "button";
+  button.textContent = "Reparera lokal data";
+  button.addEventListener("click", async () => {
+    if (!confirm("En säkerhetskopia laddas ner först. Fortsätt och ta bort endast skadade poster?")) return;
+    button.disabled = true;
+    button.textContent = "Reparerar…";
+    try {
+      downloadRepairBackup();
+      const removedKeys = await repairLocalAppData();
+      showAuthMessage(
+        removedKeys.length
+          ? `${removedKeys.length} skadade poster togs bort. Appen startas om…`
+          : "Inga skadade poster hittades. Appen startas om…",
+        false
+      );
+      setTimeout(() => location.reload(), 500);
+    } catch (error) {
+      console.error("Local data repair failed:", error);
+      showAuthMessage(`Reparationen misslyckades (${error.message || "okänt fel"}).`);
+      button.disabled = false;
+      button.textContent = "Reparera lokal data";
+    }
+  });
+  actions.appendChild(button);
+}
+
 function hasPasswordSetup() {
   return Boolean(localStorage.getItem(STORAGE_KEYS.salt) && localStorage.getItem(STORAGE_KEYS.check));
 }
@@ -5018,6 +5103,7 @@ document.addEventListener("DOMContentLoaded", () => {
     finishInitialViewSetup();
     const reason = error instanceof Error && error.message ? ` (${error.message})` : "";
     showAuthMessage(`Appen kunde inte starta korrekt${reason}. Ladda om sidan och försök igen.`);
+    showRepairDataButton();
   });
 });
 
