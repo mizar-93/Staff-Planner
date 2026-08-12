@@ -4073,6 +4073,23 @@ async function renderMachineSkills() {
     return;
   }
 
+  const summary = document.createElement("section");
+  summary.className = "competency-department-summary";
+  summary.innerHTML = departments.map(department => {
+    const count = allPeople.filter(person =>
+      Array.isArray(skills[person.id]) && skills[person.id].includes(department)
+    ).length;
+    return `<article data-department-summary="${escapeHtml(department)}"><span>${escapeHtml(department)}</span><strong>${count}</strong><small>av ${allPeople.length} personer</small></article>`;
+  }).join("");
+  const refreshDepartmentCount = department => {
+    const count = allPeople.filter(person =>
+      Array.isArray(skills[person.id]) && skills[person.id].includes(department)
+    ).length;
+    [...summary.querySelectorAll("[data-department-summary]")]
+      .find(item => item.dataset.departmentSummary === department)
+      ?.querySelector("strong")?.replaceChildren(String(count));
+  };
+
   if (selectedCompetencyPersonId && !people.some(person => person.id === selectedCompetencyPersonId)) {
     selectedCompetencyPersonId = "";
   }
@@ -4099,7 +4116,7 @@ async function renderMachineSkills() {
   const selectedPerson = people.find(person => person.id === selectedCompetencyPersonId);
   if (!selectedPerson) {
     content.innerHTML = `<div class="competency-empty-state"><span>✓</span><strong>Välj en medarbetare</strong><p>Personens maskinkompetenser och utbildningsuppgifter visas här.</p></div>`;
-    root.append(peoplePanel, content);
+    root.append(summary, peoplePanel, content);
     return;
   }
 
@@ -4141,6 +4158,7 @@ async function renderMachineSkills() {
         else personSkills.delete(department);
         skills[person.id] = [...personSkills];
         restrictions[person.id] = [...personRestrictions];
+        refreshDepartmentCount(department);
         label.classList.toggle("is-qualified", checkbox.checked);
         label.classList.remove("is-restricted");
         const restrictionButton = label.querySelector(".gd-restriction-toggle");
@@ -4185,6 +4203,7 @@ async function renderMachineSkills() {
           restrictionButton.setAttribute("aria-pressed", String(shouldRestrict));
           skills[person.id] = [...personSkills];
           restrictions[person.id] = [...personRestrictions];
+          refreshDepartmentCount(department);
           heading.querySelector(":scope > span").textContent =
             `${personSkills.size} av ${departments.length}`;
           const listStatus = peoplePanel.querySelector(`[data-person-id="${person.id}"] small`);
@@ -4229,7 +4248,7 @@ async function renderMachineSkills() {
     card.append(heading, machineGrid);
     content.appendChild(card);
   }
-  root.append(peoplePanel, content);
+  root.append(summary, peoplePanel, content);
 }
 
 async function getScheduleForDate(dateKey) {
