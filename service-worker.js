@@ -1,4 +1,4 @@
-const CACHE_NAME = "staff-planner-v20260812-6";
+const CACHE_NAME = "staff-planner-v20260812-7";
 const APP_FILES = ["./", "./index.html", "./dashboard.html", "./produktion.html", "./rast.html", "./personal.html", "./testresultat.html", "./maskiner.html", "./bedomning.html", "./todo.html", "./add.html", "./installningar.html", "./hjalp.html", "./style.css", "./app.js", "./manifest.webmanifest", "./app-icon.svg"];
 self.addEventListener("install", event => event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting())));
 self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))).then(() => self.clients.claim())));
