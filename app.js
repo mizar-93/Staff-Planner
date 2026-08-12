@@ -4328,7 +4328,8 @@ function createBackupPayload() {
 }
 
 async function createAutomaticBackupIfNeeded() {
-  const backups = await dataStore.get(STORAGE_KEYS.automaticBackups, []) || [];
+  const storedBackups = await dataStore.get(STORAGE_KEYS.automaticBackups, []);
+  const backups = Array.isArray(storedBackups) ? storedBackups : [];
   const today = formatDateKey(new Date());
   if (backups.some(item => String(item.createdAt).startsWith(today))) return;
   const payload = createBackupPayload();
@@ -4903,7 +4904,12 @@ async function openAppUI() {
 
   await loadAppSettings();
   await loadCustomWorkItems();
-  await createAutomaticBackupIfNeeded();
+  try {
+    await createAutomaticBackupIfNeeded();
+  } catch (error) {
+    // A backup failure must never prevent the user from opening the app.
+    console.error("Automatic backup failed:", error);
+  }
   initializeAppContent();
 }
 
@@ -5002,7 +5008,8 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("appShell")?.classList.add("hidden");
     document.getElementById("authScreen")?.classList.remove("hidden");
     finishInitialViewSetup();
-    showAuthMessage("Appen kunde inte starta korrekt. Ladda om sidan och försök igen.");
+    const reason = error instanceof Error && error.message ? ` (${error.message})` : "";
+    showAuthMessage(`Appen kunde inte starta korrekt${reason}. Ladda om sidan och försök igen.`);
   });
 });
 
