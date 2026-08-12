@@ -4996,7 +4996,14 @@ async function setupAuthUI() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  void setupAuthUI();
+  void setupAuthUI().catch(error => {
+    console.error("App startup failed:", error);
+    setAuthenticatedView(false);
+    document.getElementById("appShell")?.classList.add("hidden");
+    document.getElementById("authScreen")?.classList.remove("hidden");
+    finishInitialViewSetup();
+    showAuthMessage("Appen kunde inte starta korrekt. Ladda om sidan och försök igen.");
+  });
 });
 
 window.addEventListener("pageshow", event => {

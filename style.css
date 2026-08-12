@@ -29,7 +29,8 @@ body {
 }
 
 body.app-booting {
-  visibility: hidden;
+  /* Keep the login screen visible if JavaScript fails during startup. */
+  visibility: visible;
 }
 
 .auth-screen {
@@ -2647,7 +2648,6 @@ input:focus {
   }
 }
 
-body.app-booting .auth-screen,
 body.app-booting #appShell {
   display: none !important;
 }
