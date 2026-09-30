@@ -90,6 +90,7 @@ const STORAGE_KEYS = {
   machineSkillUpdatedAt: "staff_machine_skill_updated_at_enc",
   machineRestrictions: "staff_machine_restrictions_enc",
   machineSkillDetails: "staff_machine_skill_details_enc",
+  trainingReminderDismissedDay: "staff_training_reminder_dismissed_day",
   auditLog: "staff_audit_log_enc",
   productionRecords: "staff_production_records_enc",
   productionSettings: "staff_production_settings_enc",
@@ -1137,13 +1138,14 @@ async function savePeople(people) {
 }
 
 function getPersonAvailability(person) {
-  return ["sick", "vacation", "unavailable"].includes(person?.availability)
+  return ["sick", "vab", "vacation", "unavailable"].includes(person?.availability)
     ? person.availability
     : "available";
 }
 
 function getAvailabilityLabel(status) {
   if (status === "sick") return "Sjuk";
+  if (status === "vab") return "Vård av barn";
   if (status === "vacation") return "Semester";
   if (status === "unavailable") return "Inte tillgänglig";
   return "Tillgänglig";
@@ -1152,6 +1154,7 @@ function getAvailabilityLabel(status) {
 function getUnavailableMessage(person) {
   const status = getPersonAvailability(person);
   if (status === "sick") return `${person.name} är sjuk och kan inte schemaläggas.`;
+  if (status === "vab") return `${person.name} är hemma för vård av barn och kan inte schemaläggas.`;
   if (status === "vacation") return `${person.name} är på semester och kan inte schemaläggas.`;
   if (status === "unavailable") return `${person.name} är inte tillgänglig och kan inte schemaläggas.`;
   return "";
@@ -1904,6 +1907,10 @@ function getTodoWeekKey(dateValue = new Date()) {
   return formatDateKey(monday);
 }
 
+function getTodoDayKey(dateValue = new Date()) {
+  return formatDateKey(new Date(dateValue));
+}
+
 async function renderTodoList() {
   const list = document.getElementById("todoList");
   const count = document.getElementById("todoCount");
@@ -1911,14 +1918,21 @@ async function renderTodoList() {
   if (!list) return;
 
   const currentWeek = getTodoWeekKey();
+  const currentDay = getTodoDayKey();
   const storedTodos = await getTodos();
   const todos = storedTodos
     .map(todo => ({
       ...todo,
-      createdWeek: todo.createdWeek || getTodoWeekKey(todo.createdAt || new Date())
+      createdWeek: todo.createdWeek || getTodoWeekKey(todo.createdAt || new Date()),
+      completedDay: todo.completedAt
+        ? (todo.completedDay || getTodoDayKey(todo.completedAt))
+        : ""
     }))
-    .filter(todo => !todo.completedAt || todo.completedWeek === currentWeek);
-  if (todos.length !== storedTodos.length || todos.some((todo, index) => todo.createdWeek !== storedTodos[index]?.createdWeek)) {
+    .filter(todo => !todo.completedAt || todo.completedDay === currentDay);
+  if (todos.length !== storedTodos.length || todos.some((todo, index) =>
+    todo.createdWeek !== storedTodos[index]?.createdWeek ||
+    todo.completedDay !== (storedTodos[index]?.completedDay || "")
+  )) {
     await saveTodos(todos);
   }
 
@@ -1959,6 +1973,7 @@ async function renderTodoList() {
     checkbox.addEventListener("change", async () => {
       todo.completedAt = checkbox.checked ? new Date().toISOString() : "";
       todo.completedWeek = checkbox.checked ? currentWeek : "";
+      todo.completedDay = checkbox.checked ? currentDay : "";
       await saveTodos(todos);
       await renderTodoList();
     });
@@ -1971,6 +1986,16 @@ function setupTodoPage() {
   const input = document.getElementById("todoInput");
   if (!form || !input || form.dataset.bound === "true") return;
   form.dataset.bound = "true";
+  const scheduleEndOfDayCleanup = () => {
+    const now = new Date();
+    const nextDay = new Date(now);
+    nextDay.setHours(24, 0, 1, 0);
+    window.setTimeout(async () => {
+      await renderTodoList();
+      scheduleEndOfDayCleanup();
+    }, nextDay.getTime() - now.getTime());
+  };
+  scheduleEndOfDayCleanup();
   form.addEventListener("submit", async event => {
     event.preventDefault();
     const text = input.value.trim();
@@ -1985,7 +2010,8 @@ function setupTodoPage() {
       createdAt: new Date().toISOString(),
       createdWeek: getTodoWeekKey(),
       completedAt: "",
-      completedWeek: ""
+      completedWeek: "",
+      completedDay: ""
     });
     await saveTodos(todos);
     form.reset();
@@ -3161,7 +3187,7 @@ async function renderScheduleTools(schedule, people = [], skills = {}) {
   const updatedAt = localStorage.getItem(`${STORAGE_KEYS.scheduleUpdatedAt}:${getSelectedWeekKey()}`);
   const companies = [...new Set(people.map(person => person.company).filter(Boolean))].sort((a, b) => a.localeCompare(b, "sv"));
   const knownSkills = [...new Set(Object.values(skills).flat().filter(Boolean))].sort((a, b) => a.localeCompare(b, "sv"));
-  tools.innerHTML = `<div class="schedule-filter-tools"><label>Företag<select id="scheduleCompanyFilter"><option value="">Alla</option>${companies.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label><label>Status<select id="scheduleAvailabilityFilter"><option value="all">Alla</option><option value="available">Tillgänglig</option><option value="sick">Sjuk</option><option value="vacation">Semester</option><option value="unavailable">Ej tillgänglig</option></select></label><label>Kompetens<select id="scheduleSkillFilter"><option value="">Alla</option>${knownSkills.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label></div><div class="schedule-copy-tools"><label>Från<select id="copyDayFrom">${DAYS.map(day => `<option>${day}</option>`).join("")}</select></label><label>Till<select id="copyDayTo">${DAYS.map((day, index) => `<option${index === 1 ? " selected" : ""}>${day}</option>`).join("")}</select></label><button id="copyScheduleDay" class="btn" type="button">Kopiera dag</button></div><div class="schedule-template-tools"><select id="scheduleTemplateSelect"><option value="">Välj mall</option>${templates.map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button id="saveScheduleTemplate" class="btn" type="button">Spara veckan som mall</button><button id="applyScheduleTemplate" class="btn" type="button">Använd mall</button></div><div class="schedule-history-tools"><button id="undoSchedule" class="btn" type="button"${scheduleUndoStack.length ? "" : " disabled"}>↶ Ångra</button><button id="redoSchedule" class="btn" type="button"${scheduleRedoStack.length ? "" : " disabled"}>↷ Gör om</button><span class="schedule-save-state">✓ ${updatedAt ? `Sparat ${new Date(updatedAt).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : "Redo att spara"}</span></div>`;
+  tools.innerHTML = `<div class="schedule-filter-tools"><label>Företag<select id="scheduleCompanyFilter"><option value="">Alla</option>${companies.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label><label>Status<select id="scheduleAvailabilityFilter"><option value="all">Alla</option><option value="available">Tillgänglig</option><option value="sick">Sjuk</option><option value="vab">Vård av barn</option><option value="vacation">Semester</option><option value="unavailable">Ej tillgänglig</option></select></label><label>Kompetens<select id="scheduleSkillFilter"><option value="">Alla</option>${knownSkills.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}</select></label></div><div class="schedule-copy-tools"><label>Från<select id="copyDayFrom">${DAYS.map(day => `<option>${day}</option>`).join("")}</select></label><label>Till<select id="copyDayTo">${DAYS.map((day, index) => `<option${index === 1 ? " selected" : ""}>${day}</option>`).join("")}</select></label><button id="copyScheduleDay" class="btn" type="button">Kopiera dag</button></div><div class="schedule-template-tools"><select id="scheduleTemplateSelect"><option value="">Välj mall</option>${templates.map(item => `<option value="${item.id}">${escapeHtml(item.name)}</option>`).join("")}</select><button id="saveScheduleTemplate" class="btn" type="button">Spara veckan som mall</button><button id="applyScheduleTemplate" class="btn" type="button">Använd mall</button></div><div class="schedule-history-tools"><button id="undoSchedule" class="btn" type="button"${scheduleUndoStack.length ? "" : " disabled"}>↶ Ångra</button><button id="redoSchedule" class="btn" type="button"${scheduleRedoStack.length ? "" : " disabled"}>↷ Gör om</button><span class="schedule-save-state">✓ ${updatedAt ? `Sparat ${new Date(updatedAt).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}` : "Redo att spara"}</span></div>`;
   tools.querySelector("#scheduleCompanyFilter").value = scheduleFilters.company;
   tools.querySelector("#scheduleAvailabilityFilter").value = scheduleFilters.availability;
   tools.querySelector("#scheduleSkillFilter").value = scheduleFilters.skill;
@@ -3628,7 +3654,8 @@ async function renderPeople() {
     available: 0,
     vacation: 1,
     sick: 2,
-    unavailable: 3
+    vab: 3,
+    unavailable: 4
   };
   const people = allPeople
     .filter(person =>
@@ -3669,6 +3696,7 @@ async function renderPeople() {
     [
       ["available", "Tillgänglig"],
       ["sick", "Sjuk"],
+      ["vab", "Vård av barn"],
       ["vacation", "Semester"],
       ["unavailable", "Inte tillgänglig"]
     ].forEach(([value, label]) => {
@@ -3961,6 +3989,14 @@ async function renderTrainingReminders() {
   const main = document.querySelector("#appShell .main");
   if (!main) return;
 
+  const dismissedDay = localStorage.getItem(STORAGE_KEYS.trainingReminderDismissedDay);
+  const currentDay = formatDateKey(new Date());
+  if (dismissedDay === currentDay) {
+    document.getElementById("trainingReminderPanel")?.remove();
+    return;
+  }
+  if (dismissedDay) localStorage.removeItem(STORAGE_KEYS.trainingReminderDismissedDay);
+
   const [people, departments, skills, timestamps] = await Promise.all([
     getPeople(),
     getDepartments(),
@@ -4029,8 +4065,15 @@ async function renderTrainingReminders() {
         `).join("")}
       </div>
     </div>
-    <a class="btn primary training-reminder-action" href="maskiner.html">Planera utbildning</a>
+    <div class="training-reminder-actions">
+      <a class="btn primary training-reminder-action" href="maskiner.html">Planera utbildning</a>
+      <button class="btn training-reminder-close" type="button">Stäng</button>
+    </div>
   `;
+  panel.querySelector(".training-reminder-close").addEventListener("click", () => {
+    localStorage.setItem(STORAGE_KEYS.trainingReminderDismissedDay, currentDay);
+    panel.remove();
+  });
 }
 
 async function renderMachineSkills() {
