@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Lägg till</title>
-  <link rel="stylesheet" href="style.css?v=20260930-3" />
+  <link rel="stylesheet" href="style.css?v=20261007-1" />
 </head>
 <body class="app-booting">
   <div id="authScreen" class="auth-screen">
@@ -85,11 +85,12 @@
             </div>
             <fieldset class="work-item-destinations">
               <legend>Var ska den visas?</legend>
-              <label><input id="workItemSchema" type="checkbox" checked /><span><strong>Schema</strong><small>Skapa en egen rad i veckoschemat.</small></span></label>
-              <label><input id="workItemCompetency" type="checkbox" checked /><span><strong>Kompetens & test</strong><small>Bedöm behörighet och testresultat.</small></span></label>
-              <label><input id="workItemAutoSchedule" type="checkbox" /><span><strong>Autoschema</strong><small>Bemanna automatiskt med behörig personal.</small></span></label>
+              <label><input id="workItemSchema" type="checkbox" /><span><strong>Schema</strong><small>Skapa en egen rad i veckoschemat.</small></span></label>
+              <label><input id="workItemCompetency" type="checkbox" /><span><strong>Kompetens</strong><small>Registrera behörighet och utbildning.</small></span></label>
+              <label><input id="workItemTestResults" type="checkbox" /><span><strong>Testresultat</strong><small>Registrera resultat för stationen.</small></span></label>
+              <label><input id="workItemAutoSchedule" type="checkbox" /><span><strong>Autoschema</strong><small>Bemanna automatiskt. Kräver Schema och Kompetens.</small></span></label>
             </fieldset>
-            <div class="work-item-submit"><span>Poster kan redigeras, pausas och ordnas utan att data försvinner.</span><div class="work-item-form-actions"><button id="cancelWorkItemEdit" class="btn hidden" type="button">Avbryt</button><button id="saveWorkItemBtn" class="btn primary" type="submit">+ Lägg till</button></div></div>
+            <div class="work-item-submit"><span>Välj var stationen ska användas. Utan val sparas den bara här. Du kan ändra valen senare.</span><div class="work-item-form-actions"><button id="cancelWorkItemEdit" class="btn hidden" type="button">Avbryt</button><button id="saveWorkItemBtn" class="btn primary" type="submit">+ Lägg till</button></div></div>
           </form>
           <p id="workItemMessage" class="inline-message" aria-live="polite"></p>
           <div id="workItemList" class="work-item-list"></div>
@@ -98,6 +99,6 @@
       </main>
     </div>
   </div>
-<script src="app.js?v=20260930-3"></script>
+<script src="app.js?v=20261007-1"></script>
 </body>
 </html>

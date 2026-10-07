@@ -1462,6 +1462,7 @@ function applyCustomWorkItems(items) {
       ...item,
       id: item.id || makeId(),
       enabled: item.enabled !== false,
+      showInTestResults: item.showInTestResults ?? Boolean(item.showInCompetency),
       type: ["machine", "department", "training", "extra"].includes(item.type) ? item.type : "machine",
       staffCount: Math.max(1, Number(item.staffCount) || 1),
       requiredSkills: Array.isArray(item.requiredSkills) ? item.requiredSkills.filter(Boolean) : [],
@@ -1608,6 +1609,14 @@ async function getDepartments() {
 
 async function saveDepartments(departments) {
   await encryptStoredItem(STORAGE_KEYS.departments, departments);
+}
+
+async function getDepartmentsFor(destination) {
+  const departments = await getDepartments();
+  return departments.filter(name => {
+    const item = customWorkItems.find(entry => entry.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    return !item || (item.enabled && item[destination]);
+  });
 }
 
 async function getTestResults() {
@@ -3770,7 +3779,7 @@ async function renderTestResults() {
 
   const [allPeople, departments, results] = await Promise.all([
     getPeople(),
-    getDepartments(),
+    getDepartmentsFor("showInTestResults"),
     getTestResults()
   ]);
   const testQuery = (document.getElementById("testSearch")?.value || "").trim().toLocaleLowerCase();
@@ -3999,7 +4008,7 @@ async function renderTrainingReminders() {
 
   const [people, departments, skills, timestamps] = await Promise.all([
     getPeople(),
-    getDepartments(),
+    getDepartmentsFor("showInCompetency"),
     getMachineSkills(),
     getMachineSkillUpdatedAt()
   ]);
@@ -4082,7 +4091,7 @@ async function renderMachineSkills() {
 
   const [allPeople, departments, skills, timestamps, restrictions, details] = await Promise.all([
     getPeople(),
-    getDepartments(),
+    getDepartmentsFor("showInCompetency"),
     getMachineSkills(),
     getMachineSkillUpdatedAt(),
     getMachineRestrictions(),
@@ -4421,7 +4430,7 @@ async function renderDashboard() {
   const root = document.getElementById("dashboardPage");
   if (!root) return;
   const [people, departments, skills, results, events, productionRecords] = await Promise.all([
-    getPeople(), getDepartments(), getMachineSkills(), getTestResults(), getAuditLog(), getProductionRecords()
+    getPeople(), getDepartmentsFor("showInCompetency"), getMachineSkills(), getTestResults(), getAuditLog(), getProductionRecords()
   ]);
   const sick = people.filter(person => getPersonAvailability(person) === "sick").length;
   const vacation = people.filter(person => getPersonAvailability(person) === "vacation").length;
@@ -4828,7 +4837,7 @@ async function syncWorkItemCompetency(item, previousItem = null) {
   if (previousItem?.name && previousItem.name !== item.name) {
     next = next.map(value => value === previousItem.name ? item.name : value);
   }
-  const shouldShow = item.enabled && item.showInCompetency;
+  const shouldShow = item.enabled && (item.showInCompetency || item.showInTestResults);
   const contains = next.some(value => value.toLocaleLowerCase() === item.name.toLocaleLowerCase());
   if (shouldShow && !contains) next.push(item.name);
   if (!shouldShow) next = next.filter(value => value !== item.name);
@@ -4841,6 +4850,7 @@ async function setupWorkItemManager() {
   const afterSelect = document.getElementById("workItemAfter");
   const schemaCheckbox = document.getElementById("workItemSchema");
   const competencyCheckbox = document.getElementById("workItemCompetency");
+  const testResultsCheckbox = document.getElementById("workItemTestResults");
   const autoScheduleCheckbox = document.getElementById("workItemAutoSchedule");
   const typeSelect = document.getElementById("workItemType");
   const staffCountInput = document.getElementById("workItemStaffCount");
@@ -4861,8 +4871,9 @@ async function setupWorkItemManager() {
   const resetEditor = () => {
     editingId = "";
     form.reset();
-    schemaCheckbox.checked = true;
-    competencyCheckbox.checked = true;
+    schemaCheckbox.checked = false;
+    competencyCheckbox.checked = false;
+    testResultsCheckbox.checked = false;
     autoScheduleCheckbox.checked = false;
     if (typeSelect) typeSelect.value = "machine";
     if (staffCountInput) staffCountInput.value = "1";
@@ -4876,6 +4887,7 @@ async function setupWorkItemManager() {
     afterSelect.value = TASKS.includes(item.after) ? item.after : "Packa L4";
     schemaCheckbox.checked = item.showInSchema;
     competencyCheckbox.checked = item.showInCompetency;
+    testResultsCheckbox.checked = item.showInTestResults;
     autoScheduleCheckbox.checked = item.autoSchedule;
     if (typeSelect) typeSelect.value = item.type || "machine";
     if (staffCountInput) staffCountInput.value = String(item.staffCount || 1);
@@ -4893,7 +4905,7 @@ async function setupWorkItemManager() {
     afterSelect.value = [...afterSelect.options].some(option => option.value === previousValue) ? previousValue : "Packa L4";
     list.innerHTML = customWorkItems.length ? customWorkItems.map((item, index) => `
       <article class="work-item-row${item.enabled ? "" : " is-disabled"}">
-        <div><strong>${escapeHtml(item.name)}</strong><span>${({ machine: "Maskin", department: "Avdelning", training: "Utbildning", extra: "Extra person" })[item.type] || "Maskin"} · ${item.staffCount || 1} person${Number(item.staffCount) === 1 ? "" : "er"}${item.requiredSkills?.length ? ` · Kräver ${escapeHtml(item.requiredSkills.join(", "))}` : ""}</span><span>${item.showInSchema ? `Schema · efter ${escapeHtml(item.after || "Packa L4")}` : "Inte i Schema"}${item.showInCompetency ? " · Kompetens · Testresultat" : ""}${item.autoSchedule ? " · Autoschema" : ""}</span>${item.enabled ? "" : '<span class="work-item-row-status">Pausad</span>'}</div>
+        <div><strong>${escapeHtml(item.name)}</strong><span>${({ machine: "Maskin", department: "Avdelning", training: "Utbildning", extra: "Extra person" })[item.type] || "Maskin"} · ${item.staffCount || 1} person${Number(item.staffCount) === 1 ? "" : "er"}${item.requiredSkills?.length ? ` · Kräver ${escapeHtml(item.requiredSkills.join(", "))}` : ""}</span><span>${item.showInSchema ? `Schema · efter ${escapeHtml(item.after || "Packa L4")}` : "Inte i Schema"}${item.showInCompetency ? " · Kompetens" : ""}${item.showInTestResults ? " · Testresultat" : ""}${item.autoSchedule ? " · Autoschema" : ""}</span>${item.enabled ? "" : '<span class="work-item-row-status">Pausad</span>'}</div>
         <div class="work-item-row-actions">
           <button class="btn" type="button" data-move-work-item="${item.id}" data-direction="-1"${index === 0 ? " disabled" : ""} aria-label="Flytta upp">↑</button>
           <button class="btn" type="button" data-move-work-item="${item.id}" data-direction="1"${index === customWorkItems.length - 1 ? " disabled" : ""} aria-label="Flytta ner">↓</button>
@@ -4979,18 +4991,19 @@ async function setupWorkItemManager() {
     const previousItem = customWorkItems.find(item => item.id === editingId) || null;
     const showInSchema = schemaCheckbox.checked;
     const showInCompetency = competencyCheckbox.checked;
+    const showInTestResults = testResultsCheckbox.checked;
     const autoSchedule = autoScheduleCheckbox.checked;
     const type = typeSelect?.value || "machine";
     const staffCount = Math.max(1, Math.min(20, Number(staffCountInput?.value) || 1));
     const requiredSkills = [...new Set((requiredSkillsInput?.value || "").split(",").map(value => value.trim()).filter(Boolean))];
-    if (!name || (!showInSchema && !showInCompetency)) return showMessage("Ange ett namn och välj minst en sida.", "error");
+    if (!name) return showMessage("Ange ett namn.", "error");
     const duplicate = TASKS.some(task => task.toLocaleLowerCase() === name.toLocaleLowerCase() && task !== previousItem?.name) ||
       customWorkItems.some(item => item.id !== editingId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
     if (duplicate) return showMessage("Namnet finns redan.", "error");
     if (autoSchedule && (!showInSchema || !showInCompetency)) return showMessage("Autoschema kräver att både Schema och Kompetens är valda.", "error");
     const now = new Date().toISOString();
-    const item = previousItem ? { ...previousItem, name, after: afterSelect.value || "Packa L4", type, staffCount, requiredSkills, showInSchema, showInCompetency, autoSchedule, updatedAt: now }
-      : { id: makeId(), name, after: afterSelect.value || "Packa L4", type, staffCount, requiredSkills, showInSchema, showInCompetency, autoSchedule, enabled: true, createdAt: now, updatedAt: now };
+    const item = previousItem ? { ...previousItem, name, after: afterSelect.value || "Packa L4", type, staffCount, requiredSkills, showInSchema, showInCompetency, showInTestResults, autoSchedule, updatedAt: now }
+      : { id: makeId(), name, after: afterSelect.value || "Packa L4", type, staffCount, requiredSkills, showInSchema, showInCompetency, showInTestResults, autoSchedule, enabled: true, createdAt: now, updatedAt: now };
     if (previousItem && previousItem.name !== name) {
       await createWorkItemSafetySnapshot(`${previousItem.name} byter namn till ${name}`);
       await renameWorkItemReferences(previousItem.name, name);
@@ -4998,7 +5011,7 @@ async function setupWorkItemManager() {
     const nextItems = previousItem ? customWorkItems.map(entry => entry.id === item.id ? item : { ...entry, after: entry.after === previousItem.name ? name : entry.after }) : [...customWorkItems, item];
     await saveCustomWorkItems(nextItems);
     await syncWorkItemCompetency(item, previousItem);
-    await addAuditEvent("department", `${name} ${previousItem ? "uppdaterad" : "tillagd"}`, [showInSchema ? "Schema" : "", showInCompetency ? "Kompetens och Testresultat" : ""].filter(Boolean).join(" · "));
+    await addAuditEvent("department", `${name} ${previousItem ? "uppdaterad" : "tillagd"}`, [showInSchema ? "Schema" : "", showInCompetency ? "Kompetens" : "", showInTestResults ? "Testresultat" : ""].filter(Boolean).join(" · "));
     resetEditor();
     showMessage(`${name} har ${previousItem ? "uppdaterats" : "lagts till"}.`);
     await renderManager();

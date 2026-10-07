@@ -3802,7 +3802,7 @@ body.app-authenticated #appShell {
 
 .work-item-destinations {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin: 17px 0 0;
   padding: 14px;
