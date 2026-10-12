@@ -3450,7 +3450,10 @@ async function renderSchedule() {
         : isExtraTask ? "cell extra-person-cell" : "cell";
       cell.dataset.task = task;
       cell.dataset.day = day;
-      if (!selectedPersonId && !isTrainingTask && !isExtraTask) {
+      if (trainingReservation) {
+        cell.classList.add("schedule-training-cell");
+        cell.title = `${trainingReservation.person.name} har utbildning på ${task} ${day}`;
+      } else if (!selectedPersonId && !isTrainingTask && !isExtraTask) {
         cell.classList.add("schedule-shortage");
         cell.title = `${task} saknar bemanning ${day}`;
       } else if (requiredStaff > 1 && selectedPersonId) {

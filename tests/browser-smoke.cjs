@@ -110,6 +110,14 @@ let base;
     await openAppUI();
   `);
   console.log('PASS authenticated startup with isolated test data');
+  await evaluate(`
+    const trainingCell = document.querySelector('[data-task="GD2"][data-day="Måndag"]');
+    const emptyCell = document.querySelector('[data-task="GD3"][data-day="Måndag"]');
+    if (!trainingCell.classList.contains('schedule-training-cell') || trainingCell.classList.contains('schedule-shortage')) throw new Error('Training must have its own status');
+    if (!emptyCell.classList.contains('schedule-shortage')) throw new Error('Empty workplace must keep its shortage status');
+    if (getComputedStyle(trainingCell).backgroundColor === getComputedStyle(emptyCell).backgroundColor) throw new Error('Training and empty workplaces must have distinct colors');
+  `);
+  console.log('PASS training reservations use a distinct color instead of the red shortage status');
 
   await evaluate(`
     scheduleAdvancedToolsOpen = true; await renderSchedule();

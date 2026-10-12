@@ -2618,6 +2618,7 @@ input:focus {
 .schedule-history-tools { justify-content: flex-end; }
 .schedule-save-state { margin-left: auto; color: #18864b; font-size: 11px; font-weight: 800; }
 .schedule-grid .cell.schedule-shortage { box-shadow: inset 0 0 0 2px rgba(239,68,68,.22); background: #fff9f9; }
+.schedule-grid .cell.schedule-training-cell { box-shadow: inset 0 0 0 2px #c4b5fd; background: #f2efff; }
 .required-staff-badge { display: block; margin-top: 4px; color: #b42318; font-size: 9px; }
 .app-toast { position: fixed; right: 22px; bottom: 22px; z-index: 9999; max-width: min(390px, calc(100vw - 32px)); padding: 11px 14px; border-radius: 11px; background: #17315c; box-shadow: 0 12px 35px rgba(15,23,42,.24); color: #fff; font-size: 12px; font-weight: 750; opacity: 0; transform: translateY(12px); pointer-events: none; transition: .2s ease; }
 .app-toast.visible { opacity: 1; transform: translateY(0); }
