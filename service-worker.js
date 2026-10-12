@@ -1,24 +1,32 @@
-const CACHE_NAME = "staff-planner-v20261007-1";
+const CACHE_NAME = "staff-planner-v20261012-5";
 const APP_FILES = ["./", "./index.html", "./dashboard.html", "./produktion.html", "./rast.html", "./personal.html", "./testresultat.html", "./maskiner.html", "./bedomning.html", "./todo.html", "./add.html", "./installningar.html", "./hjalp.html", "./style.css", "./app.js", "./manifest.webmanifest", "./app-icon.svg"];
-self.addEventListener("install", event => event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting())));
-self.addEventListener("activate", event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))).then(() => self.clients.claim())));
+const APP_URLS = new Set(APP_FILES.map(path => new URL(path, self.registration.scope).pathname));
+
+self.addEventListener("install", event => {
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_FILES)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener("activate", event => {
+  event.waitUntil(caches.keys()
+    .then(keys => Promise.all(keys.filter(key => key.startsWith("staff-planner-") && key !== CACHE_NAME).map(key => caches.delete(key))))
+    .then(() => self.clients.claim()));
+});
+
 self.addEventListener("fetch", event => {
-  if (event.request.method !== "GET") return;
-  event.respondWith(fetch(event.request).then(response => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== "GET" || url.origin !== self.location.origin || !APP_URLS.has(url.pathname)) return;
+  const network = fetch(event.request);
+  event.waitUntil(network.then(async response => {
+    if (!response.ok || response.type === "opaque") return;
     const copy = response.clone();
-    caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
-    return response;
-  }).catch(async () => {
-    const exactMatch = await caches.match(event.request);
-    if (exactMatch) return exactMatch;
-
-    // App assets are precached without their cache-busting query string.
-    const requestUrl = new URL(event.request.url);
-    const assetMatch = await caches.match(requestUrl.pathname.split("/").pop());
-    if (assetMatch) return assetMatch;
-
-    // HTML is a valid fallback only for page navigations, never for JS/CSS.
-    if (event.request.mode === "navigate") return caches.match("./index.html");
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(event.request, copy);
+  }).catch(error => console.debug("Offline cache update skipped:", error)));
+  event.respondWith(network.catch(async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const cached = await cache.match(event.request, { ignoreSearch: true });
+    if (cached) return cached;
+    if (event.request.mode === "navigate") return (await cache.match("./index.html")) || Response.error();
     return Response.error();
   }));
 });

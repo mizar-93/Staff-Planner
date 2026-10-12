@@ -466,11 +466,15 @@ body {
   font-weight: 800;
   text-decoration: none;
   transform: translateY(-160%);
+  opacity: 0;
+  pointer-events: none;
   transition: transform .18s ease;
 }
 
 .skip-link:focus {
   transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 :where(a, button, input, select, textarea):focus-visible {
@@ -2552,6 +2556,30 @@ input:focus {
 }
 
 .schedule-tools { display: grid; gap: 9px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 13px; background: #f8fafc; }
+.extra-assignment-manager { min-width: 0; margin-top: 20px; }
+.extra-assignment-manager h3 { margin: 0; color: var(--primary); }
+.extra-assignment-manager label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 700; }
+.extra-assignment-manager p { color: var(--muted); font-size: 12px; }
+.extra-assignment-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin: 12px 0; }
+.extra-assignment-form label { flex: 1 1 200px; }
+.extra-assignment-form input { width: 100%; min-height: 42px; margin: 0; }
+.extra-assignment-list { display: grid; gap: 6px; }
+.extra-assignment-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.extra-assignment-row span { overflow-wrap: anywhere; min-width: 0; font-size: 13px; }
+.extra-assignment-row .btn { flex-shrink: 0; }
+.extra-assignment-manager-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.extra-assignment-count { padding: 5px 10px; border-radius: 999px; background: var(--primary-soft); color: var(--primary-hover); font-size: 12px; font-weight: 700; }
+.extra-assignment-list { margin-top: 12px; }
+.extra-assignment-row { padding: 8px 0; border-top: 1px solid var(--border); }
+.extra-assignment-status { min-height: 20px; margin: 8px 0 0; }
+.add-page-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.add-page-shortcuts a { display: inline-flex; align-items: center; min-height: 40px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 10px; background: #fff; color: var(--primary-hover); text-decoration: none; font-size: 13px; font-weight: 700; }
+.add-page-shortcuts a:hover { background: var(--primary-soft); }
+#addPersonSection, #workItemForm, #extraAssignmentManager { scroll-margin-top: 20px; }
+@media (max-width: 480px) {
+  .extra-assignment-form .btn { width: 100%; }
+  .extra-assignment-form label { flex-basis: 100%; }
+}
 .schedule-filter-tools,
 .schedule-copy-tools,
 .schedule-template-tools,
@@ -3792,6 +3820,8 @@ body.app-authenticated #appShell {
   margin: 0;
   border-color: #d5dfec;
   background: #fbfcfe;
+  border-radius: 11px;
+  padding-inline: 12px;
 }
 
 .work-item-fields label > small {
@@ -3886,6 +3916,7 @@ body.app-authenticated #appShell {
   display: flex;
   align-items: center;
   gap: 7px;
+  flex-wrap: wrap;
 }
 
 .work-item-row-actions .btn {
@@ -3949,7 +3980,7 @@ body.app-authenticated #appShell {
   background: #fbfcfe;
 }
 
-.work-item-row > div {
+.work-item-row > div:not(.work-item-row-actions) {
   display: grid;
   gap: 3px;
 }
@@ -4038,9 +4069,17 @@ body.app-authenticated #appShell {
     flex-wrap: wrap;
   }
 
-  .work-item-form-actions .btn,
-  .work-item-row-actions .btn {
+  .work-item-form-actions .btn {
     flex: 1;
+  }
+
+  .work-item-row-actions .btn {
+    flex: 1 1 65px;
+    white-space: nowrap;
+  }
+
+  .work-item-row-actions [data-move-work-item] {
+    flex: 0 0 36px;
   }
 
   .work-item-trash {

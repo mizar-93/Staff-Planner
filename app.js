@@ -164,6 +164,7 @@ let editingAssessmentId = "";
 let autoLockTimeoutId = null;
 const scheduleUndoStack = [];
 const scheduleRedoStack = [];
+let scheduleHistoryWeek = "";
 const scheduleFilters = { company: "", availability: "all", skill: "" };
 let scheduleAdvancedToolsOpen = false;
 
@@ -176,8 +177,15 @@ function showAppToast(text, type = "success") {
   showAppToast.timeoutId = setTimeout(() => toast.classList.remove("visible"), 3200);
 }
 
-function recordScheduleHistory(schedule) {
-  scheduleUndoStack.push(structuredClone(schedule));
+function resetScheduleHistory() {
+  scheduleUndoStack.length = 0;
+  scheduleRedoStack.length = 0;
+  scheduleHistoryWeek = getSelectedWeekKey();
+}
+
+function recordScheduleHistory(schedule, trainingLeaders = {}, trainingLocations = {}, extraPersonLocations = {}) {
+  if (scheduleHistoryWeek !== getSelectedWeekKey()) resetScheduleHistory();
+  scheduleUndoStack.push(structuredClone({ schedule, trainingLeaders, trainingLocations, extraPersonLocations }));
   if (scheduleUndoStack.length > 30) scheduleUndoStack.shift();
   scheduleRedoStack.length = 0;
 }
@@ -351,6 +359,7 @@ function clearPersistentData() {
 
   const weeklyPrefixes = [
     STORAGE_KEYS.schedule,
+    STORAGE_KEYS.scheduleUpdatedAt,
     STORAGE_KEYS.trainingLeaders,
     STORAGE_KEYS.trainingLocations,
     STORAGE_KEYS.extraPersonLocations,
@@ -379,16 +388,17 @@ function createEmptySchedule() {
   );
 }
 
+function normalizeTaskPlacements(placements, activeTasks) {
+  // Keep paused rows and hidden workdays when another placement is edited.
+  const stored = placements && typeof placements === "object" && !Array.isArray(placements) ? placements : {};
+  return Object.fromEntries([...new Set([...activeTasks, ...Object.keys(stored)])].map(task => [
+    task,
+    Object.fromEntries(ALL_DAYS.map(day => [day, typeof stored[task]?.[day] === "string" ? stored[task][day] : ""]))
+  ]));
+}
+
 function normalizeSchedule(schedule) {
-  const normalized = createEmptySchedule();
-
-  TASKS.forEach(task => {
-    DAYS.forEach(day => {
-      normalized[task][day] = schedule?.[task]?.[day] ?? "";
-    });
-  });
-
-  return normalized;
+  return normalizeTaskPlacements(schedule, TASKS);
 }
 
 function createEmptyTrainingLeaders() {
@@ -401,15 +411,7 @@ function createEmptyTrainingLeaders() {
 }
 
 function normalizeTrainingLeaders(trainingLeaders) {
-  const normalized = createEmptyTrainingLeaders();
-
-  Object.keys(normalized).forEach(task => {
-    DAYS.forEach(day => {
-      normalized[task][day] = trainingLeaders?.[task]?.[day] ?? "";
-    });
-  });
-
-  return normalized;
+  return normalizeTaskPlacements(trainingLeaders, TASKS.filter(isTrainingTaskName));
 }
 
 function createEmptyTrainingLocations() {
@@ -422,15 +424,7 @@ function createEmptyTrainingLocations() {
 }
 
 function normalizeTrainingLocations(trainingLocations) {
-  const normalized = createEmptyTrainingLocations();
-
-  Object.keys(normalized).forEach(task => {
-    DAYS.forEach(day => {
-      normalized[task][day] = trainingLocations?.[task]?.[day] ?? "";
-    });
-  });
-
-  return normalized;
+  return normalizeTaskPlacements(trainingLocations, TASKS.filter(isTrainingTaskName));
 }
 
 function createEmptyExtraPersonLocations() {
@@ -443,19 +437,11 @@ function createEmptyExtraPersonLocations() {
 }
 
 function normalizeExtraPersonLocations(locations) {
-  const normalized = createEmptyExtraPersonLocations();
-  Object.keys(normalized).forEach(task => {
-    DAYS.forEach(day => {
-      normalized[task][day] = EXTRA_PERSON_ASSIGNMENTS.includes(locations?.[task]?.[day])
-        ? locations[task][day]
-        : "";
-    });
-  });
-  return normalized;
+  return normalizeTaskPlacements(locations, TASKS.filter(isExtraPersonTask));
 }
 
-function createEmptyBreakPlan() {
-  return Object.fromEntries(DAYS.map(day => [day, {
+function createEmptyBreakPlan(days = DAYS) {
+  return Object.fromEntries(days.map(day => [day, {
     mode: "together",
     togetherStart: "",
     togetherSecondStart: "",
@@ -470,9 +456,9 @@ function createEmptyBreakPlan() {
 }
 
 function normalizeBreakPlan(breakPlan) {
-  const normalized = createEmptyBreakPlan();
+  const normalized = createEmptyBreakPlan(ALL_DAYS);
 
-  DAYS.forEach(day => {
+  ALL_DAYS.forEach(day => {
     const stored = breakPlan?.[day] ?? {};
     normalized[day] = {
       ...normalized[day],
@@ -533,13 +519,14 @@ function getTaskDepartment(task) {
 }
 
 async function createFairWeeklySchedule(priorityLines) {
-  const [people, skills, restrictions, currentSchedule, trainingLeaders, trainingLocations] = await Promise.all([
+  const [people, skills, restrictions, currentSchedule, trainingLeaders, trainingLocations, currentExtraLocations] = await Promise.all([
     getPeople(),
     getMachineSkills(),
     getMachineRestrictions(),
     getSchedule(),
     getTrainingLeaders(),
-    getTrainingLocations()
+    getTrainingLocations(),
+    getExtraPersonLocations()
   ]);
   const availablePeople = people.filter(
     person => getPersonAvailability(person) === "available"
@@ -566,10 +553,10 @@ async function createFairWeeklySchedule(priorityLines) {
     };
   }
 
-  const schedule = createEmptySchedule();
-  TASKS.filter(isTrainingTaskName).forEach(task => {
+  const schedule = normalizeSchedule(currentSchedule);
+  TASKS.filter(task => !isTrainingTaskName(task)).forEach(task => {
     DAYS.forEach(day => {
-      schedule[task][day] = currentSchedule[task]?.[day] ?? "";
+      schedule[task][day] = "";
     });
   });
 
@@ -588,7 +575,8 @@ async function createFairWeeklySchedule(priorityLines) {
     person.id,
     { total: 0, order: index }
   ]));
-  const extraPersonLocations = createEmptyExtraPersonLocations();
+  const extraPersonLocations = normalizeExtraPersonLocations(currentExtraLocations);
+  TASKS.filter(isExtraPersonTask).forEach(task => DAYS.forEach(day => { extraPersonLocations[task][day] = ""; }));
   let assignmentCount = 0;
   let unfilledCount = 0;
 
@@ -663,10 +651,13 @@ async function createFairWeeklySchedule(priorityLines) {
       assignmentCount += 1;
     });
 
-    [
-      { task: "Extra person 1", assignment: "GD-rummet" },
-      { task: "Extra person 2", assignment: "Lock & dosor" }
-    ].forEach(({ task, assignment }, extraIndex) => {
+    TASKS.filter(isExtraPersonTask).map((task, index) => ({
+      task, assignment: task === "Extra person 1" ? "GD-rummet"
+        : task === "Extra person 2" ? "Lock & dosor" : EXTRA_PERSON_ASSIGNMENTS[index] || ""
+    })).forEach(({ task, assignment }, extraIndex) => {
+      if (!EXTRA_PERSON_ASSIGNMENTS.includes(assignment)) {
+        assignment = EXTRA_PERSON_ASSIGNMENTS[extraIndex] || EXTRA_PERSON_ASSIGNMENTS[0] || "";
+      }
       const selectedPerson = availablePeople
         .filter(person => {
           if (assignedToday.has(person.id)) return false;
@@ -708,6 +699,41 @@ async function createFairWeeklySchedule(priorityLines) {
   };
 }
 
+function manageDialogFocus(modal, onEscape) {
+  const previousFocus = document.activeElement;
+  const previousOverflow = document.body.style.overflow;
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  modal.tabIndex = -1;
+  const heading = modal.querySelector("h2, h3");
+  if (heading) {
+    if (!heading.id) heading.id = `dialog-${makeId()}`;
+    modal.setAttribute("aria-labelledby", heading.id);
+  }
+  const focusable = () => [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')]
+    .filter(element => !element.hidden && element.getClientRects().length);
+  const handleKey = event => {
+    if (event.key === "Escape" && onEscape) { event.preventDefault(); onEscape(); return; }
+    if (event.key !== "Tab") return;
+    const items = focusable();
+    if (!items.length) { event.preventDefault(); modal.focus(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === modal)) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === modal)) {
+      event.preventDefault(); first.focus();
+    }
+  };
+  document.body.style.overflow = "hidden";
+  modal.addEventListener("keydown", handleKey);
+  (focusable()[0] || modal).focus();
+  return () => {
+    modal.removeEventListener("keydown", handleKey);
+    document.body.style.overflow = previousOverflow;
+    if (previousFocus?.isConnected) previousFocus.focus();
+  };
+}
+
 function showSchedulePreview(result, people, options = {}) {
   return new Promise(resolve => {
     const overlay = document.createElement("div");
@@ -746,7 +772,9 @@ function showSchedulePreview(result, people, options = {}) {
     modal.style.setProperty("--schedule-day-count", String(DAYS.length));
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-    const close = accepted => { overlay.remove(); resolve(accepted); };
+    let cleanupFocus;
+    const close = accepted => { overlay.remove(); cleanupFocus?.(); resolve(accepted); };
+    cleanupFocus = manageDialogFocus(modal, () => close(false));
     modal.querySelector(".preview-close").addEventListener("click", () => close(false));
     modal.querySelector(".preview-cancel")?.addEventListener("click", () => close(false));
     modal.querySelector(".preview-save").addEventListener("click", () => close(!isShareView));
@@ -760,12 +788,11 @@ function setupAutoSchedule() {
   if (!button || button.dataset.bound === "true") return;
 
   button.dataset.bound = "true";
+  let creating = false;
   button.addEventListener("click", async () => {
-    const shouldCreate = confirm(
-      "Vill du skapa ett nytt schema för den valda veckan? Nuvarande produktionsplaceringar ersätts, men utbildningsraderna behålls."
-    );
-    if (!shouldCreate) return;
-
+    if (creating || button.disabled) return;
+    creating = true;
+    const weekKey = getSelectedWeekKey();
     button.disabled = true;
     button.textContent = "Skapar schema…";
     if (message) {
@@ -781,11 +808,12 @@ function setupAutoSchedule() {
         message.className = `auto-schedule-message ${result.ok ? "success" : "error"}`;
       }
       if (result.ok) {
-        const accepted = await showSchedulePreview(result, await getPeople());
-        if (!accepted) {
-          if (message) message.textContent = "Förhandsvisningen stängdes utan att schemat ändrades.";
+        const previousState = await getScheduleState();
+        if (getSelectedWeekKey() !== weekKey) {
+          showAppToast("Veckan ändrades. Skapa schemat igen för den valda veckan.", "error");
           return;
         }
+        recordScheduleHistory(previousState.schedule, previousState.trainingLeaders, previousState.trainingLocations, previousState.extraPersonLocations);
         await Promise.all([
           saveSchedule(result.schedule),
           saveExtraPersonLocations(result.extraPersonLocations)
@@ -793,6 +821,7 @@ function setupAutoSchedule() {
         await addAuditEvent("schedule", "Veckoschema skapat", `${result.assignmentCount} placeringar för ${formatWeekRange()}`);
         await renderSchedule();
         await renderBreakPlanner();
+        if (message) message.textContent = `${result.message} Schemat har sparats. Du kan ändra placeringarna direkt i tabellen.`;
       }
     } catch (error) {
       console.error(error);
@@ -802,8 +831,10 @@ function setupAutoSchedule() {
         message.className = "auto-schedule-message error";
       }
     } finally {
-      button.disabled = false;
+      creating = false;
       button.textContent = "Skapa veckoschema";
+      const root = document.getElementById("scheduleGrid");
+      if (root) await renderSchedulePrioritySelector(root);
     }
   });
 }
@@ -903,7 +934,30 @@ function bindOnce(element, eventName, handler) {
   if (!element || element.dataset.bound === "true") return;
 
   element.dataset.bound = "true";
-  element.addEventListener(eventName, handler);
+  let pending = false;
+  element.addEventListener(eventName, event => {
+    if (pending) { event.preventDefault(); return; }
+    const controls = element.matches("form") ? [...element.querySelectorAll('button[type="submit"], button:not([type])')]
+      : element.matches("button") && eventName === "click" ? [element] : [];
+    const previousDisabled = controls.map(control => control.disabled);
+    try {
+      const result = handler(event);
+      if (result && typeof result.then === "function") {
+        pending = true;
+        controls.forEach(control => { control.disabled = true; });
+        result.catch(error => {
+          console.error("Action failed:", error);
+          showAppToast("Ändringen kunde inte sparas. Försök igen.", "error");
+        }).finally(() => {
+          pending = false;
+          controls.forEach((control, index) => { control.disabled = previousDisabled[index]; });
+        });
+      }
+    } catch (error) {
+      console.error("Action failed:", error);
+      showAppToast("Åtgärden kunde inte slutföras. Försök igen.", "error");
+    }
+  });
 }
 
 function bindEnterToClick(input, button) {
@@ -1094,6 +1148,8 @@ async function unlockApp(password) {
 }
 
 function lockApp() {
+  clearTimeout(autoLockTimeoutId);
+  resetScheduleHistory();
   sessionKey = null;
   appUnlocked = false;
   clearStoredSessionPassword();
@@ -1123,12 +1179,15 @@ async function getPeople() {
   const people = await decryptStoredItem(STORAGE_KEYS.people, []);
   const storedYearKey = localStorage.getItem(STORAGE_KEYS.peopleYear);
 
-  if (people === null || storedYearKey !== getCurrentYearKey()) {
+  if (people === null) {
     const empty = [];
     await savePeople(empty);
     return empty;
   }
 
+  if (storedYearKey !== getCurrentYearKey() && Array.isArray(people)) {
+    localStorage.setItem(STORAGE_KEYS.peopleYear, getCurrentYearKey());
+  }
   return Array.isArray(people) ? people : [];
 }
 
@@ -1243,6 +1302,7 @@ function renderTrainingScheduleSummary(scheduleRoot, people, schedule, trainingL
     summary?.remove();
     return;
   }
+
   const groupedEntries = [...entries.reduce((groups, entry) => {
     const group = groups.get(entry.person.id) || { person: entry.person, sessions: [] };
     group.sessions.push(entry);
@@ -1367,50 +1427,58 @@ const dataStore = {
   keys() { return Object.keys(localStorage); }
 };
 
-async function loadAppSettings() {
-  const stored = await dataStore.get(STORAGE_KEYS.appSettings, {});
-  appSettings = { ...DEFAULT_APP_SETTINGS, ...(stored || {}) };
-  appSettings.productionMachines = Array.isArray(appSettings.productionMachines)
-    ? appSettings.productionMachines.filter(value => typeof value === "string" && value.trim())
-    : [...DEFAULT_APP_SETTINGS.productionMachines];
-  appSettings.breakLines = Array.isArray(appSettings.breakLines)
-    ? appSettings.breakLines.filter(line =>
-      line && typeof line.id === "string" && line.id.trim() &&
-      typeof line.label === "string" && line.label.trim() &&
-      Array.isArray(line.workplaces) && line.workplaces.some(Boolean)
-    ).map(line => ({
-      id: line.id.trim(),
-      label: line.label.trim(),
-      workplaces: [...new Set(line.workplaces.filter(value => typeof value === "string" && value.trim()).map(value => value.trim()))]
-    }))
-    : structuredClone(DEFAULT_APP_SETTINGS.breakLines);
-  if (!appSettings.breakLines.length) appSettings.breakLines = structuredClone(DEFAULT_APP_SETTINGS.breakLines);
-  appSettings.autoLockMinutes = Math.max(0, Number(appSettings.autoLockMinutes) || 0);
-  appSettings.extraAssignments = [...new Set([
-    ...BREAK_EXTRA_ASSIGNMENT_PRIORITY,
-    ...(Array.isArray(appSettings.extraAssignments) ? appSettings.extraAssignments : [])
-  ])];
-  const selectedDays = ALL_DAYS.filter(day => appSettings.workDays?.includes(day));
-  DAYS = selectedDays.length ? selectedDays : [...ALL_DAYS];
+function normalizeStringList(values, fallback = []) {
+  const unique = new Map();
+  (Array.isArray(values) ? values : fallback).forEach(value => {
+    if (typeof value !== "string" || !value.trim()) return;
+    const trimmed = value.trim();
+    const key = trimmed.toLocaleLowerCase();
+    if (!unique.has(key)) unique.set(key, trimmed);
+  });
+  return [...unique.values()];
+}
+
+function normalizeAppSettings(settings) {
+  const next = { ...DEFAULT_APP_SETTINGS, ...(settings || {}) };
+  next.productionMachines = normalizeStringList(next.productionMachines, DEFAULT_APP_SETTINGS.productionMachines);
+  if (!next.productionMachines.length) next.productionMachines = [...DEFAULT_APP_SETTINGS.productionMachines];
+  next.extraAssignments = normalizeStringList(next.extraAssignments, DEFAULT_APP_SETTINGS.extraAssignments);
+  next.workDays = ALL_DAYS.filter(day => Array.isArray(next.workDays) && next.workDays.includes(day));
+  if (!next.workDays.length) next.workDays = [...ALL_DAYS];
+  const minutes = Number(next.autoLockMinutes);
+  next.autoLockMinutes = Number.isFinite(minutes) ? Math.max(0, minutes) : DEFAULT_APP_SETTINGS.autoLockMinutes;
+  const lines = Array.isArray(next.breakLines) ? next.breakLines : DEFAULT_APP_SETTINGS.breakLines;
+  const seenIds = new Set();
+  next.breakLines = lines.flatMap(line => {
+    if (!line || typeof line.id !== "string" || typeof line.label !== "string") return [];
+    const id = line.id.trim();
+    const label = line.label.trim();
+    const workplaces = normalizeStringList(line.workplaces);
+    if (!id || !label || !workplaces.length || seenIds.has(id.toLocaleLowerCase())) return [];
+    seenIds.add(id.toLocaleLowerCase());
+    return [{ id, label, workplaces }];
+  });
+  if (!next.breakLines.length) next.breakLines = structuredClone(DEFAULT_APP_SETTINGS.breakLines);
+  return next;
+}
+
+function applyAppSettings(settings) {
+  appSettings = normalizeAppSettings(settings);
+  DAYS = [...appSettings.workDays];
   EXTRA_PERSON_ASSIGNMENTS = [...appSettings.extraAssignments];
   BREAK_LINE_WORKPLACES = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.workplaces]));
   BREAK_LINE_LABELS = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.label]));
   BREAK_WORKPLACE_DISPLAY_ORDER = [...new Set(appSettings.breakLines.flatMap(line => line.workplaces))];
 }
 
+async function loadAppSettings() {
+  applyAppSettings(await dataStore.get(STORAGE_KEYS.appSettings, {}));
+}
+
 async function saveAppSettings(nextSettings) {
-  appSettings = { ...DEFAULT_APP_SETTINGS, ...nextSettings, workDays: ALL_DAYS.filter(day => nextSettings.workDays?.includes(day)) };
-  appSettings.extraAssignments = [...new Set([
-    ...BREAK_EXTRA_ASSIGNMENT_PRIORITY,
-    ...(Array.isArray(appSettings.extraAssignments) ? appSettings.extraAssignments : [])
-  ])];
-  if (!appSettings.workDays.length) appSettings.workDays = [...ALL_DAYS];
-  DAYS = [...appSettings.workDays];
-  EXTRA_PERSON_ASSIGNMENTS = [...appSettings.extraAssignments];
-  BREAK_LINE_WORKPLACES = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.workplaces]));
-  BREAK_LINE_LABELS = Object.fromEntries(appSettings.breakLines.map(line => [line.id, line.label]));
-  BREAK_WORKPLACE_DISPLAY_ORDER = [...new Set(appSettings.breakLines.flatMap(line => line.workplaces))];
-  await dataStore.set(STORAGE_KEYS.appSettings, appSettings);
+  const normalized = normalizeAppSettings(nextSettings);
+  await dataStore.set(STORAGE_KEYS.appSettings, normalized);
+  applyAppSettings(normalized);
 }
 
 function setupShareSchedule() {
@@ -1442,8 +1510,12 @@ function setupShareSchedule() {
   });
 }
 
+function isExtraPersonTaskName(task) {
+  return /^extra\s+person(?:\s+\d+)?$/i.test(String(task || "").trim());
+}
+
 function isExtraPersonTask(task) {
-  return task === "Extra person 1" || task === "Extra person 2" ||
+  return isExtraPersonTaskName(task) ||
     customWorkItems.some(item => item.enabled && item.name === task && item.type === "extra");
 }
 
@@ -1463,7 +1535,8 @@ function applyCustomWorkItems(items) {
       id: item.id || makeId(),
       enabled: item.enabled !== false,
       showInTestResults: item.showInTestResults ?? Boolean(item.showInCompetency),
-      type: ["machine", "department", "training", "extra"].includes(item.type) ? item.type : "machine",
+      type: isExtraPersonTaskName(item.name) ? "extra"
+        : ["machine", "department", "training", "extra"].includes(item.type) ? item.type : "machine",
       staffCount: Math.max(1, Number(item.staffCount) || 1),
       requiredSkills: Array.isArray(item.requiredSkills) ? item.requiredSkills.filter(Boolean) : [],
       createdAt: item.createdAt || new Date().toISOString(),
@@ -2064,6 +2137,7 @@ function enhanceAppShell() {
     "installningar.html": "Ändringar här gäller bara den här enheten och sparas automatiskt när du trycker Spara."
   };
   const header = main?.querySelector(".header");
+  if (!appSettings.showTips) main?.querySelector(".page-tip")?.remove();
   if (appSettings.showTips && header && pageTips[currentPage] && !main.querySelector(".page-tip")) {
     header.insertAdjacentHTML("afterend", `<aside class="page-tip"><span>Tips</span><p>${escapeHtml(pageTips[currentPage])}</p><button type="button" aria-label="Dölj tips">×</button></aside>`);
     main.querySelector(".page-tip button").addEventListener("click", event => event.currentTarget.parentElement.remove());
@@ -2115,11 +2189,13 @@ async function renderSettings() {
     const productionMachines = root.querySelector("#productionMachinesSetting").value.split(",").map(value => value.trim()).filter(Boolean);
     const extraAssignments = root.querySelector("#extraAssignmentsSetting").value.split("\n").map(value => value.trim()).filter(Boolean);
     const breakLines = root.querySelector("#breakLinesSetting").value.split("\n").map(value => { const [id, label, workplaces = ""] = value.split("|").map(part => part.trim()); return { id, label: label || id, workplaces: workplaces.split(",").map(part => part.trim()).filter(Boolean) }; }).filter(line => line.id && line.workplaces.length);
-    if (!productionMachines.length || !extraAssignments.length || !breakLines.length) { root.querySelector("#settingsMessage").textContent = "Produktion, extrauppgifter och rastlinjer får inte vara tomma."; root.querySelector("#settingsMessage").className = "inline-message error"; return; }
+    if (!productionMachines.length || !breakLines.length) { root.querySelector("#settingsMessage").textContent = "Produktion och rastlinjer får inte vara tomma."; root.querySelector("#settingsMessage").className = "inline-message error"; return; }
     await saveAppSettings({ ...appSettings, workDays, productionMachines, extraAssignments, breakLines, organizationName: root.querySelector("#organizationNameSetting").value.trim(), autoLockMinutes: Number(root.querySelector("#autoLockSetting").value), feedbackEmail: root.querySelector("#feedbackEmailSetting").value.trim(), showTips: root.querySelector("#showTipsSetting").checked });
     root.querySelector("#settingsMessage").textContent = "Inställningarna har sparats.";
     root.querySelector("#settingsMessage").className = "inline-message success";
     await addAuditEvent("settings", "Inställningar uppdaterade", appSettings.organizationName);
+    setupAutoLock();
+    enhanceAppShell();
   });
   bindOnce(root.querySelector("#exportSettingsBackupBtn"), "click", downloadBackup);
   bindOnce(root.querySelector("#removeDemoDataBtn"), "click", async () => {
@@ -2131,6 +2207,7 @@ async function renderSettings() {
   });
   bindOnce(root.querySelector("#changePasswordForm"), "submit", async event => {
     event.preventDefault();
+    const form = event.currentTarget;
     const currentPassword = root.querySelector("#currentPasswordSetting").value;
     const nextPassword = root.querySelector("#newPasswordSetting").value;
     const confirmation = root.querySelector("#confirmPasswordSetting").value;
@@ -2138,7 +2215,7 @@ async function renderSettings() {
     if (currentPassword !== getStoredSessionPassword()) { status.textContent = "Nuvarande lösenord är fel."; status.className = "inline-message error"; return; }
     if (nextPassword.length < 6 || nextPassword !== confirmation) { status.textContent = "Det nya lösenordet måste vara minst 6 tecken och matcha."; status.className = "inline-message error"; return; }
     await changeAppPassword(nextPassword);
-    event.currentTarget.reset();
+    form.reset();
     status.textContent = "Lösenordet har ändrats och all data krypterats på nytt.";
     status.className = "inline-message success";
   });
@@ -2175,9 +2252,10 @@ async function setupOnboarding() {
   overlay.className = "modal-overlay onboarding-overlay";
   overlay.innerHTML = `<section class="onboarding-modal"><span class="onboarding-kicker">Välkommen</span><h2>Gör Staff Planner redo</h2><p>Tre små val räcker. Allt kan ändras senare i Inställningar.</p><form id="onboardingForm"><label>Arbetsplatsens namn<input id="onboardingOrganization" placeholder="Företag eller avdelning" /></label><fieldset><legend>Arbetsdagar</legend><div class="settings-day-grid">${ALL_DAYS.map(day => `<label><input type="checkbox" name="onboardingDay" value="${day}" checked /> ${day}</label>`).join("")}</div></fieldset><label>Personal, en person per rad<textarea id="onboardingPeople" rows="5" placeholder="Anna Andersson&#10;Erik Svensson"></textarea></label><label class="settings-switch"><input id="onboardingDemo" type="checkbox" /><span>Lägg till tre tydligt märkta testpersoner</span></label><div class="onboarding-actions"><button id="skipOnboarding" class="btn" type="button">Hoppa över</button><button class="btn primary" type="submit">Spara och börja</button></div></form></section>`;
   document.body.appendChild(overlay);
-  const complete = async extra => { await saveAppSettings({ ...appSettings, onboardingComplete: true, ...extra }); overlay.remove(); showAppToast("Grundinställningen är klar."); };
-  overlay.querySelector("#skipOnboarding").addEventListener("click", () => complete({}));
-  overlay.querySelector("#onboardingForm").addEventListener("submit", async event => {
+  const cleanupFocus = manageDialogFocus(overlay.querySelector(".onboarding-modal"));
+  const complete = async extra => { await saveAppSettings({ ...appSettings, onboardingComplete: true, ...extra }); overlay.remove(); cleanupFocus(); showAppToast("Grundinställningen är klar."); };
+  bindOnce(overlay.querySelector("#skipOnboarding"), "click", () => complete({}));
+  bindOnce(overlay.querySelector("#onboardingForm"), "submit", async event => {
     event.preventDefault();
     const workDays = [...overlay.querySelectorAll('[name="onboardingDay"]:checked')].map(input => input.value);
     if (!workDays.length) return showAppToast("Välj minst en arbetsdag.", "error");
@@ -2299,14 +2377,14 @@ function createAutomaticBreakGroups(
       .filter(([, group]) => group === groupNumber)
       .map(([personId]) => workplaces[personId])
       .filter(assignment => EXTRA_PERSON_ASSIGNMENTS.includes(assignment)));
-    let assignment = BREAK_EXTRA_ASSIGNMENT_PRIORITY.find(value => !groupAssignments.has(value)) || "";
+    let assignment = BREAK_EXTRA_ASSIGNMENT_PRIORITY.find(value => EXTRA_PERSON_ASSIGNMENTS.includes(value) && !groupAssignments.has(value)) || "";
     let candidate = [...extraCandidatePool.values()].find(({ person }) => {
       if (assignment !== "GD-rummet") return true;
       const personRestrictions = Array.isArray(restrictions[person.id]) ? restrictions[person.id] : [];
       return !personRestrictions.includes("GD");
     });
     if (!candidate && assignment === "GD-rummet") {
-      assignment = BREAK_EXTRA_ASSIGNMENT_PRIORITY.find(value => value !== "GD-rummet" && !groupAssignments.has(value)) || "";
+      assignment = BREAK_EXTRA_ASSIGNMENT_PRIORITY.find(value => EXTRA_PERSON_ASSIGNMENTS.includes(value) && value !== "GD-rummet" && !groupAssignments.has(value)) || "";
       candidate = [...extraCandidatePool.values()][0];
     }
     if (!candidate) break;
@@ -2573,7 +2651,8 @@ async function renderBreakPlanner() {
       ? "<option value=\"\">Välj maskin / avdelning</option>"
       : "<option value=\"\">Välj grupp först</option>";
     workplaceSelect.disabled = selectedGroup !== 1 && selectedGroup !== 2;
-    [...getProductionWorkplaces(), ...EXTRA_PERSON_ASSIGNMENTS].forEach(task => {
+    const savedWorkplace = dayPlan.workplaces[person.id];
+    [...new Set([...getProductionWorkplaces(), ...EXTRA_PERSON_ASSIGNMENTS, ...(savedWorkplace ? [savedWorkplace] : [])])].forEach(task => {
       if (usedWorkplaces.has(task) && dayPlan.workplaces[person.id] !== task) return;
 
       const option = document.createElement("option");
@@ -3186,10 +3265,37 @@ function escapeHtml(value) {
   });
 }
 
-async function renderScheduleTools(schedule, people = [], skills = {}) {
+async function getScheduleState() {
+  const [schedule, trainingLeaders, trainingLocations, extraPersonLocations] = await Promise.all([
+    getSchedule(), getTrainingLeaders(), getTrainingLocations(), getExtraPersonLocations()
+  ]);
+  return { schedule, trainingLeaders, trainingLocations, extraPersonLocations };
+}
+
+async function saveScheduleState(state) {
+  await Promise.all([
+    saveSchedule(state.schedule),
+    saveTrainingLeaders(state.trainingLeaders || {}),
+    saveTrainingLocations(state.trainingLocations || {}),
+    saveExtraPersonLocations(state.extraPersonLocations || {})
+  ]);
+}
+
+function copyScheduleDay(state, from, to) {
+  const next = structuredClone(state);
+  ["schedule", "trainingLeaders", "trainingLocations", "extraPersonLocations"].forEach(key => {
+    Object.values(next[key] || {}).forEach(row => { row[to] = row[from] || ""; });
+  });
+  return next;
+}
+
+async function renderScheduleTools(schedule, people = [], skills = {}, placementDetails = null) {
   const root = document.getElementById("scheduleGrid");
   const card = root?.parentElement;
   if (!card) return;
+  if (scheduleHistoryWeek !== getSelectedWeekKey()) resetScheduleHistory();
+  const state = placementDetails ? { schedule, ...placementDetails } : await getScheduleState();
+  const remember = () => recordScheduleHistory(state.schedule, state.trainingLeaders, state.trainingLocations, state.extraPersonLocations);
   let tools = card.querySelector(".schedule-tools");
   if (!tools) { tools = document.createElement("div"); tools.className = "schedule-tools"; card.insertBefore(tools, root); }
   const templates = await dataStore.get(STORAGE_KEYS.scheduleTemplates, []) || [];
@@ -3231,31 +3337,40 @@ async function renderScheduleTools(schedule, people = [], skills = {}) {
   tools.querySelector(".schedule-copy-tools").insertAdjacentHTML("afterbegin", '<div class="schedule-tools-heading"><strong>Kopiera en dag</strong><small>Kopierar alla placeringar från en dag till en annan.</small></div>');
   tools.querySelector(".schedule-template-tools").insertAdjacentHTML("afterbegin", '<div class="schedule-tools-heading"><strong>Veckomallar</strong><small>Spara eller återanvänd ett färdigt veckoschema.</small></div>');
   [["#scheduleCompanyFilter", "company"], ["#scheduleAvailabilityFilter", "availability"], ["#scheduleSkillFilter", "skill"]].forEach(([selector, key]) => tools.querySelector(selector).addEventListener("change", async event => { scheduleFilters[key] = event.target.value; await renderSchedule(); }));
-  tools.querySelector("#copyScheduleDay").addEventListener("click", async () => {
+  bindOnce(tools.querySelector("#copyScheduleDay"), "click", async () => {
     const from = tools.querySelector("#copyDayFrom").value, to = tools.querySelector("#copyDayTo").value;
     if (from === to) return showAppToast("Välj två olika dagar.", "error");
-    recordScheduleHistory(schedule);
-    TASKS.forEach(task => { schedule[task] ??= {}; schedule[task][to] = schedule[task][from] || ""; });
-    await saveSchedule(schedule); showAppToast(`${from} kopierades till ${to}.`); await renderSchedule();
+    remember();
+    await saveScheduleState(copyScheduleDay(state, from, to));
+    showAppToast(`${from} kopierades till ${to}.`);
+    await renderSchedule();
+    await renderBreakPlanner();
   });
-  tools.querySelector("#saveScheduleTemplate").addEventListener("click", async () => {
+  bindOnce(tools.querySelector("#saveScheduleTemplate"), "click", async () => {
     const name = window.prompt("Namn på mallen:", `Veckomall ${templates.length + 1}`)?.trim();
     if (!name) return;
-    await dataStore.set(STORAGE_KEYS.scheduleTemplates, [...templates, { id: makeId(), name, createdAt: new Date().toISOString(), schedule: structuredClone(schedule) }]);
-    showAppToast("Veckomallen har sparats."); await renderScheduleTools(schedule);
+    await dataStore.set(STORAGE_KEYS.scheduleTemplates, [...templates, { id: makeId(), name, createdAt: new Date().toISOString(), ...structuredClone(state) }]);
+    showAppToast("Veckomallen har sparats."); await renderScheduleTools(schedule, people, skills, placementDetails);
   });
-  tools.querySelector("#applyScheduleTemplate").addEventListener("click", async () => {
+  bindOnce(tools.querySelector("#applyScheduleTemplate"), "click", async () => {
     const template = templates.find(item => item.id === tools.querySelector("#scheduleTemplateSelect").value);
     if (!template) return showAppToast("Välj en mall först.", "error");
-    recordScheduleHistory(schedule); await saveSchedule(normalizeSchedule(template.schedule)); showAppToast("Veckomallen har lagts in."); await renderSchedule();
+    remember();
+    await saveScheduleState({
+      schedule: normalizeSchedule(template.schedule),
+      trainingLeaders: template.trainingLeaders ?? state.trainingLeaders,
+      trainingLocations: template.trainingLocations ?? state.trainingLocations,
+      extraPersonLocations: template.extraPersonLocations ?? state.extraPersonLocations
+    });
+    showAppToast("Veckomallen har lagts in."); await renderSchedule(); await renderBreakPlanner();
   });
-  tools.querySelector("#undoSchedule").addEventListener("click", async () => {
+  bindOnce(tools.querySelector("#undoSchedule"), "click", async () => {
     const previous = scheduleUndoStack.pop(); if (!previous) return;
-    scheduleRedoStack.push(structuredClone(schedule)); await saveSchedule(previous); showAppToast("Senaste schemaändringen ångrades."); await renderSchedule();
+    scheduleRedoStack.push(structuredClone(state)); await saveScheduleState(previous); showAppToast("Senaste schemaändringen ångrades."); await renderSchedule(); await renderBreakPlanner();
   });
-  tools.querySelector("#redoSchedule").addEventListener("click", async () => {
+  bindOnce(tools.querySelector("#redoSchedule"), "click", async () => {
     const next = scheduleRedoStack.pop(); if (!next) return;
-    scheduleUndoStack.push(structuredClone(schedule)); await saveSchedule(next); showAppToast("Schemaändringen gjordes om."); await renderSchedule();
+    scheduleUndoStack.push(structuredClone(state)); await saveScheduleState(next); showAppToast("Schemaändringen gjordes om."); await renderSchedule(); await renderBreakPlanner();
   });
 }
 
@@ -3277,7 +3392,7 @@ async function renderSchedule() {
     ]);
   const dates = getDatesForWeek();
 
-  await renderScheduleTools(schedule, people, skills);
+  await renderScheduleTools(schedule, people, skills, { trainingLeaders, trainingLocations, extraPersonLocations });
 
   renderAvailabilitySummary(root, people);
   renderUnassignedPeopleSummary(root, people, schedule, trainingLeaders);
@@ -3343,6 +3458,7 @@ async function renderSchedule() {
         cell.title = `${task} behöver ${requiredStaff} personer; nuvarande schema har en plats`;
       }
       select.className = "schedule-select";
+      select.setAttribute("aria-label", `Person för ${task} ${day}`);
 
       if (isTrainingTask) {
         select.setAttribute("aria-label", `Person under utbildning för ${task} ${day}`);
@@ -3365,9 +3481,11 @@ async function renderSchedule() {
 
       people.forEach(person => {
         if (trainingReservation) return;
-        if (scheduleFilters.company && person.company !== scheduleFilters.company) return;
-        if (scheduleFilters.availability !== "all" && getPersonAvailability(person) !== scheduleFilters.availability) return;
-        if (scheduleFilters.skill && !(skills[person.id] || []).includes(scheduleFilters.skill)) return;
+        if (person.id !== selectedPersonId) {
+          if (scheduleFilters.company && person.company !== scheduleFilters.company) return;
+          if (scheduleFilters.availability !== "all" && getPersonAvailability(person) !== scheduleFilters.availability) return;
+          if (scheduleFilters.skill && !(skills[person.id] || []).includes(scheduleFilters.skill)) return;
+        }
         if (assignedPeople.has(person.id) && person.id !== selectedPersonId) {
           return;
         }
@@ -3378,12 +3496,15 @@ async function renderSchedule() {
 
         const availability = getPersonAvailability(person);
         if (
-          isExtraTask &&
+          isExtraTask && person.id !== selectedPersonId &&
           extraPersonLocations[task]?.[day] === "GD-rummet" &&
           Array.isArray(restrictions[person.id]) &&
           restrictions[person.id].includes("GD")
         ) return;
         let eligibilityLabel = availability === "available" ? "" : getUnavailableMessage(person);
+        if (isExtraTask && extraPersonLocations[task]?.[day] === "GD-rummet" && restrictions[person.id]?.includes("GD")) {
+          eligibilityLabel = "Får inte GD";
+        }
         if (!isTrainingTask && !isExtraTask) {
           const department = getTaskDepartment(task);
           const personSkills = Array.isArray(skills[person.id]) ? skills[person.id] : [];
@@ -3391,7 +3512,8 @@ async function renderSchedule() {
             ? restrictions[person.id]
             : [];
           const isRestricted = department === "GD" && personRestrictions.includes("GD");
-          const isEligible = (!department || personSkills.includes(department)) && !isRestricted;
+          const isEligible = (!department || personSkills.includes(department)) &&
+            (workItem?.requiredSkills || []).every(requiredSkill => personSkills.includes(requiredSkill)) && !isRestricted;
           if (!isEligible) {
             eligibilityLabel = isRestricted ? "Får inte GD" : "Kompetens saknas";
           }
@@ -3443,7 +3565,7 @@ async function renderSchedule() {
           return;
         }
 
-        recordScheduleHistory(schedule);
+        recordScheduleHistory(schedule, trainingLeaders, trainingLocations, extraPersonLocations);
         schedule[task] ??= {};
         schedule[task][day] = selectedId;
 
@@ -3492,14 +3614,17 @@ async function renderSchedule() {
         locationLabel.className = "training-field-label";
         locationLabel.innerHTML = "<span>2</span> Uppgift";
         locationSelect.className = "schedule-select extra-person-location-select";
+        locationSelect.setAttribute("aria-label", `Uppgift för ${task} ${day}`);
         locationSelect.disabled = !selectedPersonId;
         emptyLocationOption.value = "";
         emptyLocationOption.textContent = "Välj uppgift";
         locationSelect.appendChild(emptyLocationOption);
-        EXTRA_PERSON_ASSIGNMENTS.forEach(location => {
+        const savedLocation = extraPersonLocations[task]?.[day] || "";
+        const locationOptions = [...new Set([...EXTRA_PERSON_ASSIGNMENTS, ...(savedLocation ? [savedLocation] : [])])];
+        locationOptions.forEach(location => {
           const option = document.createElement("option");
           option.value = location;
-          option.textContent = location;
+          option.textContent = EXTRA_PERSON_ASSIGNMENTS.includes(location) ? location : `${location} (borttagen)`;
           option.selected = extraPersonLocations[task]?.[day] === location;
           locationSelect.appendChild(option);
         });
@@ -3512,10 +3637,12 @@ async function renderSchedule() {
             locationSelect.value = extraPersonLocations[task]?.[day] || "";
             return;
           }
+          recordScheduleHistory(schedule, trainingLeaders, trainingLocations, extraPersonLocations);
           extraPersonLocations[task] ??= {};
           extraPersonLocations[task][day] = locationSelect.value;
           await saveExtraPersonLocations(extraPersonLocations);
           await addAuditEvent("schedule", `${task} · ${day}`, locationSelect.value ? `Uppgift: ${locationSelect.value}` : "Uppgift rensad");
+          await renderSchedule();
         });
         cell.append(locationLabel, locationSelect);
       }
@@ -3576,6 +3703,7 @@ async function renderSchedule() {
             await renderSchedule();
             return;
           }
+          recordScheduleHistory(schedule, trainingLeaders, trainingLocations, extraPersonLocations);
           trainingLeaders[task] ??= {};
           trainingLeaders[task][day] = leaderId;
           await saveTrainingLeaders(trainingLeaders);
@@ -3624,6 +3752,7 @@ async function renderSchedule() {
             await renderSchedule();
             return;
           }
+          recordScheduleHistory(schedule, trainingLeaders, trainingLocations, extraPersonLocations);
           trainingLocations[task] ??= {};
           trainingLocations[task][day] = nextLocation;
           await saveTrainingLocations(trainingLocations);
@@ -4329,14 +4458,15 @@ async function renderProduction() {
   const [people, records, settings, schedule] = await Promise.all([
     getPeople(), getProductionRecords(), getProductionSettings(), getScheduleForDate(selectedProductionDate)
   ]);
-  const machines = appSettings.productionMachines?.length ? appSettings.productionMachines : ["GD1", "GD2", "GD3", "GD4"];
+  const configuredMachines = appSettings.productionMachines;
+  const machines = [...new Set([...configuredMachines, ...Object.keys(records[selectedProductionDate]?.machines || {})])];
   const stored = records[selectedProductionDate];
   const dayIndex = (() => {
     const [year, month, day] = selectedProductionDate.split("-").map(Number);
     const value = new Date(year, month - 1, day).getDay();
     return value >= 1 && value <= 5 ? value - 1 : -1;
   })();
-  const scheduleDay = dayIndex >= 0 ? DAYS[dayIndex] : "";
+  const scheduleDay = dayIndex >= 0 ? ALL_DAYS[dayIndex] : "";
   const record = stored || {
     date: selectedProductionDate,
     target: settings.dailyTarget,
@@ -4345,12 +4475,12 @@ async function renderProduction() {
     }]))
   };
   const total = machines.reduce((sum, machine) => sum + (Number(record.machines?.[machine]?.result) || 0), 0);
-  const target = Number(record.target) || settings.dailyTarget;
+  const target = Number(record.target ?? settings.dailyTarget);
   const personOptions = (selectedId, savedName = "") => `<option value="">Välj person</option>${selectedId && !people.some(person => person.id === selectedId) ? `<option value="${selectedId}" selected>${escapeHtml(savedName || "Tidigare personal")}</option>` : ""}${people.map(person => `<option value="${person.id}"${person.id === selectedId ? " selected" : ""}>${escapeHtml(person.name)}</option>`).join("")}`;
   root.innerHTML = `
     <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn primary" type="button">Spara dagen</button></div>
     <div class="production-kpis"><article id="productionTotalCard" class="${total >= target ? "goal-card-met" : "goal-card-missed"}"><span>Dagens produktion</span><strong id="productionTotal">${total}</strong><small>box totalt</small></article><article><span>Dagligt mål</span><strong id="productionGoalValue">${target}</strong><small>box</small></article><article class="factory-record-card"><span>Fabriksrekord</span><strong id="factoryRecordValue">${settings.factoryRecord}</strong><small>officiellt rekord · uppdateras vid nytt rekord</small><button id="editFactoryRecordBtn" type="button">Ändra manuellt</button></article></div>
-    <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${machine.replace("GD", "GD-")}</strong><label>Operatör<select data-machine="${machine}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Resultat (BOX)<input data-machine="${machine}" data-field="result" class="production-result" type="number" min="0" value="${item.result ?? ""}" placeholder="0" /></label><label>Svinn (KG)<input data-machine="${machine}" data-field="waste" class="production-waste" type="number" min="0" step="0.01" inputmode="decimal" value="${item.waste ?? ""}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${machine}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
+    <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${escapeHtml(machine.replace("GD", "GD-"))}</strong><label>Operatör<select data-machine="${escapeHtml(machine)}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Resultat (BOX)<input data-machine="${escapeHtml(machine)}" data-field="result" class="production-result" type="number" min="0" value="${escapeHtml(item.result ?? "")}" placeholder="0" /></label><label>Svinn (KG)<input data-machine="${escapeHtml(machine)}" data-field="waste" class="production-waste" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(item.waste ?? "")}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${escapeHtml(machine)}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
     <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Klicka på en dag för att visa eller ta bort resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<div class="production-history-item"><button type="button" data-production-menu="${item.date}" class="production-history-trigger ${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button><div class="production-history-menu" data-production-actions="${item.date}" hidden><button type="button" data-production-view="${item.date}">Visa</button><button type="button" class="danger" data-production-delete="${item.date}">Ta bort</button></div></div>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
   `;
   const updateSummary = () => {
@@ -4364,10 +4494,10 @@ async function renderProduction() {
     status.className = `production-status ${currentTotal >= currentTarget ? "goal-met" : "goal-missed"}`;
   };
   root.querySelectorAll(".production-result, #productionTarget").forEach(input => input.addEventListener("input", updateSummary));
-  root.querySelector("#productionDate").addEventListener("change", event => { selectedProductionDate = event.target.value; void renderProduction(); });
+  root.querySelector("#productionDate").addEventListener("change", event => { if (!event.target.value || !event.target.reportValidity()) return; selectedProductionDate = event.target.value; void renderProduction(); });
   root.querySelector("#syncScheduleBtn").addEventListener("click", async () => {
     const currentSchedule = await getScheduleForDate(selectedProductionDate);
-    machines.forEach(machine => { const select = root.querySelector(`[data-machine="${machine}"][data-field="personId"]`); select.value = scheduleDay ? currentSchedule[machine]?.[scheduleDay] || "" : ""; });
+    machines.forEach(machine => { const select = root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="personId"]`); select.value = scheduleDay ? currentSchedule[machine]?.[scheduleDay] || "" : ""; });
   });
   root.querySelector("#editFactoryRecordBtn").addEventListener("click", async () => {
     const enteredValue = prompt("Ange fabriksrekord (box):", String(settings.factoryRecord));
@@ -4382,10 +4512,11 @@ async function renderProduction() {
     await addAuditEvent("production", "Fabriksrekord ändrat", `${settings.factoryRecord} box`);
     await renderProduction();
   });
-  root.querySelector("#saveProductionBtn").addEventListener("click", async () => {
+  bindOnce(root.querySelector("#saveProductionBtn"), "click", async () => {
+    if (![...root.querySelectorAll('input[type="number"]')].every(input => input.reportValidity())) return;
     const previousRecord = settings.factoryRecord;
     const dayRecord = { date: selectedProductionDate, target: Number(root.querySelector("#productionTarget").value) || 0, machines: {}, updatedAt: new Date().toISOString() };
-    machines.forEach(machine => { const personId = root.querySelector(`[data-machine="${machine}"][data-field="personId"]`).value; dayRecord.machines[machine] = { personId, personName: people.find(person => person.id === personId)?.name || "", result: Number(root.querySelector(`[data-machine="${machine}"][data-field="result"]`).value) || 0, waste: Number(root.querySelector(`[data-machine="${machine}"][data-field="waste"]`).value) || 0, comment: root.querySelector(`[data-machine="${machine}"][data-field="comment"]`).value.trim() }; });
+    machines.forEach(machine => { const personId = root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="personId"]`).value; dayRecord.machines[machine] = { personId, personName: people.find(person => person.id === personId)?.name || record.machines?.[machine]?.personName || "", result: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="result"]`).value) || 0, waste: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="waste"]`).value) || 0, comment: root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="comment"]`).value.trim() }; });
     dayRecord.total = machines.reduce((sum, machine) => sum + dayRecord.machines[machine].result, 0);
     records[selectedProductionDate] = dayRecord;
     settings.dailyTarget = dayRecord.target;
@@ -4419,7 +4550,7 @@ async function renderProduction() {
     await renderProduction();
     await renderDashboard();
   }));
-  root.addEventListener("click", event => {
+  bindOnce(root, "click", event => {
     if (!event.target.closest(".production-history-item")) {
       root.querySelectorAll(".production-history-menu").forEach(menu => { menu.hidden = true; });
     }
@@ -4487,7 +4618,7 @@ async function createAutomaticBackupIfNeeded() {
   const storedBackups = await dataStore.get(STORAGE_KEYS.automaticBackups, []);
   const backups = Array.isArray(storedBackups) ? storedBackups : [];
   const today = formatDateKey(new Date());
-  if (backups.some(item => String(item.createdAt).startsWith(today))) return;
+  if (backups.some(item => formatDateKey(new Date(item.createdAt)) === today)) return;
   const payload = createBackupPayload();
   delete payload.data[STORAGE_KEYS.automaticBackups];
   delete payload.data[STORAGE_KEYS.salt];
@@ -4506,6 +4637,13 @@ function isValidBackupPayload(payload) {
   ) {
     return false;
   }
+
+  // Imported ciphertext needs the original salt and password check to remain readable.
+  try {
+    if (typeof payload.data[STORAGE_KEYS.salt] !== "string" || fromBase64(payload.data[STORAGE_KEYS.salt]).length !== 16) return false;
+    const check = JSON.parse(payload.data[STORAGE_KEYS.check]);
+    if (typeof check?.iv !== "string" || typeof check?.data !== "string" || fromBase64(check.iv).length !== 12 || fromBase64(check.data).length < 16) return false;
+  } catch { return false; }
 
   return Object.entries(payload.data).every(([key, value]) => {
     if (!isAppStorageKey(key) || typeof value !== "string") return false;
@@ -4621,6 +4759,8 @@ async function refreshAppViews() {
   await renderTrainingReminders();
   await renderDashboard();
   await renderProduction();
+  await renderTodoList();
+  renderExtraAssignmentManager();
 }
 
 async function editPerson(id) {
@@ -4749,6 +4889,7 @@ function setupAddForm() {
     await addAuditEvent("person", `${name} tillagd`, company);
     form.reset();
     showAddSuccessMessage(message);
+    nameInput.focus();
   });
 
   bindOnce(clearBtn, "click", () => {
@@ -4786,13 +4927,14 @@ async function renameWorkItemReferences(previousName, nextName) {
   ]);
 
   const weeklyKeys = Object.keys(localStorage).filter(key =>
-    key.startsWith(`${STORAGE_KEYS.schedule}:`) || key.startsWith(`${STORAGE_KEYS.trainingLocations}:`)
+    [STORAGE_KEYS.schedule, STORAGE_KEYS.trainingLeaders, STORAGE_KEYS.trainingLocations, STORAGE_KEYS.extraPersonLocations]
+      .some(prefix => key.startsWith(`${prefix}:`))
   );
   for (const key of weeklyKeys) {
     const stored = await decryptStoredItem(key, null);
     if (!stored || typeof stored !== "object") continue;
     let changed = false;
-    if (key.startsWith(`${STORAGE_KEYS.schedule}:`) && Object.hasOwn(stored, previousName)) {
+    if (Object.hasOwn(stored, previousName)) {
       stored[nextName] = stored[previousName];
       delete stored[previousName];
       changed = true;
@@ -4804,6 +4946,22 @@ async function renameWorkItemReferences(previousName, nextName) {
     }
     if (changed) await encryptStoredItem(key, stored);
   }
+  const templates = await dataStore.get(STORAGE_KEYS.scheduleTemplates, []);
+  if (Array.isArray(templates)) {
+    templates.forEach(template => {
+      ["schedule", "trainingLeaders", "trainingLocations", "extraPersonLocations"].forEach(key => {
+        if (template[key] && Object.hasOwn(template[key], previousName)) {
+          template[key][nextName] = template[key][previousName];
+          delete template[key][previousName];
+        }
+      });
+      Object.values(template.trainingLocations || {}).forEach(days => Object.keys(days || {}).forEach(day => {
+        if (days[day] === previousName) days[day] = nextName;
+      }));
+    });
+    await dataStore.set(STORAGE_KEYS.scheduleTemplates, templates);
+  }
+  resetScheduleHistory();
 }
 
 async function getWorkItemUsageCount(name) {
@@ -4824,10 +4982,13 @@ function chooseWorkItemReplacement(item, usageCount) {
     overlay.innerHTML = `<section class="replacement-modal"><h3>${escapeHtml(item.name)} används i schemat</h3><p>${usageCount} sparade placeringar är kopplade till posten. Välj en ersättare innan den tas bort, eller pausa den i stället.</p><label>Ersätt med<select><option value="">Välj ersättare</option>${candidates.map(entry => `<option value="${entry.id}">${escapeHtml(entry.name)}</option>`).join("")}</select></label><div><button class="btn" data-action="cancel" type="button">Avbryt</button><button class="btn" data-action="pause" type="button">Pausa i stället</button><button class="btn danger" data-action="replace" type="button" disabled>Ersätt och ta bort</button></div></section>`;
     document.body.appendChild(overlay);
     const select = overlay.querySelector("select"), replace = overlay.querySelector('[data-action="replace"]');
+    let cleanupFocus;
+    const close = value => { overlay.remove(); cleanupFocus?.(); resolve(value); };
+    cleanupFocus = manageDialogFocus(overlay.querySelector(".replacement-modal"), () => close(null));
     select.addEventListener("change", () => { replace.disabled = !select.value; });
-    overlay.querySelector('[data-action="cancel"]').addEventListener("click", () => { overlay.remove(); resolve(null); });
-    overlay.querySelector('[data-action="pause"]').addEventListener("click", () => { overlay.remove(); resolve({ action: "pause" }); });
-    replace.addEventListener("click", () => { const replacement = candidates.find(entry => entry.id === select.value); overlay.remove(); resolve(replacement ? { action: "replace", replacement } : null); });
+    overlay.querySelector('[data-action="cancel"]').addEventListener("click", () => close(null));
+    overlay.querySelector('[data-action="pause"]').addEventListener("click", () => close({ action: "pause" }));
+    replace.addEventListener("click", () => { const replacement = candidates.find(entry => entry.id === select.value); close(replacement ? { action: "replace", replacement } : null); });
   });
 }
 
@@ -4842,6 +5003,55 @@ async function syncWorkItemCompetency(item, previousItem = null) {
   if (shouldShow && !contains) next.push(item.name);
   if (!shouldShow) next = next.filter(value => value !== item.name);
   await saveDepartments([...new Set(next)]);
+}
+
+function renderExtraAssignmentManager(statusText = "") {
+  const panel = document.getElementById("extraAssignmentManager");
+  if (!panel) return;
+  panel.innerHTML = `<div class="extra-assignment-manager-heading"><h3>Uppgifter för extra personer</h3><span class="extra-assignment-count">${EXTRA_PERSON_ASSIGNMENTS.length} uppgifter</span></div>
+    <p>Lägg till uppgifter som kan väljas för alla extra personer i schemat. Borttagna uppgifter ligger kvar i sparade placeringar.</p>
+    <form class="extra-assignment-form"><label>Ny uppgift<input name="assignment" required maxlength="120" placeholder="Exempel: Hjälp på lagret" /></label><button class="btn primary" type="submit">+ Lägg till uppgift</button></form>
+    <div class="extra-assignment-status inline-message" role="status" aria-live="polite">${escapeHtml(statusText)}</div>
+    <div class="extra-assignment-list">${EXTRA_PERSON_ASSIGNMENTS.map((assignment, index) => `<div class="extra-assignment-row"><span>${escapeHtml(assignment)}</span><button class="btn danger" type="button" data-remove-assignment="${index}" aria-label="Ta bort ${escapeHtml(assignment)}">Ta bort</button></div>`).join("") || '<div class="empty-state">Inga uppgifter ännu. Lägg till den första ovan.</div>'}</div>`;
+  let saving = false;
+  const saveAssignments = async (assignments, message) => {
+    if (saving) return;
+    saving = true;
+    const controls = [...panel.querySelectorAll("button, input")];
+    controls.forEach(control => { control.disabled = true; });
+    try {
+      await saveAppSettings({ ...appSettings, extraAssignments: assignments });
+      renderExtraAssignmentManager(message);
+      panel.querySelector('input[name="assignment"]').focus();
+    } catch (error) {
+      console.error("Extra assignment save failed:", error);
+      const status = panel.querySelector(".extra-assignment-status");
+      status.textContent = "Ändringen kunde inte sparas. Försök igen.";
+      status.classList.add("error");
+    } finally {
+      saving = false;
+      controls.forEach(control => { control.disabled = false; });
+    }
+  };
+  panel.querySelector("form").addEventListener("submit", async event => {
+    event.preventDefault();
+    if (saving) return;
+    const input = event.currentTarget.elements.assignment;
+    const assignment = input.value.trim();
+    if (!assignment) { input.focus(); return; }
+    if (EXTRA_PERSON_ASSIGNMENTS.some(value => value.toLocaleLowerCase() === assignment.toLocaleLowerCase())) {
+      const status = panel.querySelector(".extra-assignment-status");
+      status.textContent = "Uppgiften finns redan.";
+      status.classList.add("error");
+      input.focus();
+      return;
+    }
+    await saveAssignments([...EXTRA_PERSON_ASSIGNMENTS, assignment], "Uppgiften har lagts till och kan väljas i schemat.");
+  });
+  panel.querySelectorAll("[data-remove-assignment]").forEach(button => button.addEventListener("click", async () => {
+    const index = Number(button.dataset.removeAssignment);
+    await saveAssignments(EXTRA_PERSON_ASSIGNMENTS.filter((_, assignmentIndex) => assignmentIndex !== index), "Uppgiften har tagits bort från listan. Sparade placeringar finns kvar.");
+  }));
 }
 
 async function setupWorkItemManager() {
@@ -4993,7 +5203,7 @@ async function setupWorkItemManager() {
     const showInCompetency = competencyCheckbox.checked;
     const showInTestResults = testResultsCheckbox.checked;
     const autoSchedule = autoScheduleCheckbox.checked;
-    const type = typeSelect?.value || "machine";
+    const type = isExtraPersonTaskName(name) ? "extra" : typeSelect?.value || "machine";
     const staffCount = Math.max(1, Math.min(20, Number(staffCountInput?.value) || 1));
     const requiredSkills = [...new Set((requiredSkillsInput?.value || "").split(",").map(value => value.trim()).filter(Boolean))];
     if (!name) return showMessage("Ange ett namn.", "error");
@@ -5040,6 +5250,7 @@ function initializeAppContent() {
   renderHelpPage();
   setupAddForm();
   void setupWorkItemManager();
+  renderExtraAssignmentManager();
   setupAutoSchedule();
   setupShareSchedule();
   setupAutoLock();
