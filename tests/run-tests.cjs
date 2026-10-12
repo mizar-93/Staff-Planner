@@ -71,6 +71,22 @@ async function test(name, action) {
     assert.equal(settings.autoLockMinutes, 30);
     assert.deepEqual(plain(run('normalizeAppSettings({extraAssignments:[]}).extraAssignments')), []);
   });
+  await test('Can counts convert at 240 per BOX and round up only at 0.6 or above', () => {
+    assert.equal(run('convertProductionCansToBoxes(240)'), 1);
+    assert.equal(run('convertProductionCansToBoxes("7200")'), 30);
+    assert.equal(run('convertProductionCansToBoxes(360)'), 1);
+    assert.equal(run('convertProductionCansToBoxes(241)'), 1);
+    assert.equal(run('convertProductionCansToBoxes(5376)'), 22); // 22.4
+    assert.equal(run('convertProductionCansToBoxes(5400)'), 22); // 22.5
+    assert.equal(run('convertProductionCansToBoxes(5423)'), 22); // just below 22.6
+    assert.equal(run('convertProductionCansToBoxes(5424)'), 23); // exactly 22.6
+    assert.equal(run('convertProductionCansToBoxes(5425)'), 23);
+    assert.equal(run('convertProductionCansToBoxes(0)'), 0);
+    assert.equal(run('convertProductionCansToBoxes("")'), '');
+    assert.equal(run('convertProductionCansToBoxes(-1)'), null);
+    assert.equal(run('convertProductionCansToBoxes(1.5)'), null);
+    assert.equal(run('convertProductionCansToBoxes("invalid")'), null);
+  });
   await test('Day copy includes training and extra tasks without mutating its source', () => {
     const state = {
       schedule: { GD1: { Måndag: 'p1', Tisdag: 'p2' } },

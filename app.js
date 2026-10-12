@@ -4455,6 +4455,18 @@ function showProductionCelebration(total, previousRecord) {
   setTimeout(close, 8000);
 }
 
+const PRODUCTION_CANS_PER_BOX = 240;
+
+function convertProductionCansToBoxes(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  const cans = Number(value);
+  if (!Number.isSafeInteger(cans) || cans < 0) return null;
+  const wholeBoxes = Math.floor(cans / PRODUCTION_CANS_PER_BOX);
+  const remainingCans = cans % PRODUCTION_CANS_PER_BOX;
+  // Compare whole cans at the 0.6 threshold to avoid floating-point boundary errors.
+  return wholeBoxes + (remainingCans >= PRODUCTION_CANS_PER_BOX * 0.6 ? 1 : 0);
+}
+
 async function renderProduction() {
   const root = document.getElementById("productionPage");
   if (!root) return;
@@ -4483,7 +4495,7 @@ async function renderProduction() {
   root.innerHTML = `
     <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn primary" type="button">Spara dagen</button></div>
     <div class="production-kpis"><article id="productionTotalCard" class="${total >= target ? "goal-card-met" : "goal-card-missed"}"><span>Dagens produktion</span><strong id="productionTotal">${total}</strong><small>box totalt</small></article><article><span>Dagligt mål</span><strong id="productionGoalValue">${target}</strong><small>box</small></article><article class="factory-record-card"><span>Fabriksrekord</span><strong id="factoryRecordValue">${settings.factoryRecord}</strong><small>officiellt rekord · uppdateras vid nytt rekord</small><button id="editFactoryRecordBtn" type="button">Ändra manuellt</button></article></div>
-    <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${escapeHtml(machine.replace("GD", "GD-"))}</strong><label>Operatör<select data-machine="${escapeHtml(machine)}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Resultat (BOX)<input data-machine="${escapeHtml(machine)}" data-field="result" class="production-result" type="number" min="0" value="${escapeHtml(item.result ?? "")}" placeholder="0" /></label><label>Svinn (KG)<input data-machine="${escapeHtml(machine)}" data-field="waste" class="production-waste" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(item.waste ?? "")}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${escapeHtml(machine)}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
+    <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><p class="production-conversion-note">${PRODUCTION_CANS_PER_BOX} dosor = 1 box. Ange antal dosor för automatisk omräkning, eller skriv BOX direkt. BOX avrundas uppåt från 0,6 och nedåt under 0,6.</p><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${escapeHtml(machine.replace("GD", "GD-"))}</strong><label>Operatör<select data-machine="${escapeHtml(machine)}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Antal dosor<input data-machine="${escapeHtml(machine)}" data-field="cans" class="production-cans" type="number" min="0" max="9007199254740991" step="1" inputmode="numeric" value="${escapeHtml(item.cans ?? "")}" placeholder="0" /></label><label>Resultat (BOX)<input data-machine="${escapeHtml(machine)}" data-field="result" class="production-result" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(item.result ?? "")}" placeholder="0" /></label><label>Svinn (KG)<input data-machine="${escapeHtml(machine)}" data-field="waste" class="production-waste" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(item.waste ?? "")}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${escapeHtml(machine)}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
     <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Klicka på en dag för att visa eller ta bort resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<div class="production-history-item"><button type="button" data-production-menu="${item.date}" class="production-history-trigger ${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button><div class="production-history-menu" data-production-actions="${item.date}" hidden><button type="button" data-production-view="${item.date}">Visa</button><button type="button" class="danger" data-production-delete="${item.date}">Ta bort</button></div></div>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
   `;
   const updateSummary = () => {
@@ -4496,7 +4508,26 @@ async function renderProduction() {
     status.textContent = currentTotal >= currentTarget ? "Målet uppnått" : "Under målet";
     status.className = `production-status ${currentTotal >= currentTarget ? "goal-met" : "goal-missed"}`;
   };
-  root.querySelectorAll(".production-result, #productionTarget").forEach(input => input.addEventListener("input", updateSummary));
+  root.querySelectorAll(".production-cans, .production-result").forEach(input => {
+    const selectZero = () => {
+      if (input.value !== "" && Number(input.value) === 0) input.select();
+    };
+    input.addEventListener("focus", selectZero);
+    input.addEventListener("click", selectZero);
+  });
+  root.querySelectorAll(".production-cans").forEach(input => input.addEventListener("input", () => {
+    if (!input.validity.valid) return;
+    const boxes = convertProductionCansToBoxes(input.value);
+    if (boxes === null) return;
+    input.closest(".production-machine-row").querySelector(".production-result").value = boxes;
+    updateSummary();
+  }));
+  root.querySelectorAll(".production-result").forEach(input => input.addEventListener("input", () => {
+    // A manual BOX edit replaces the can-based result, so its old count must not be saved.
+    input.closest(".production-machine-row").querySelector(".production-cans").value = "";
+    updateSummary();
+  }));
+  root.querySelector("#productionTarget").addEventListener("input", updateSummary);
   root.querySelector("#productionDate").addEventListener("change", event => { if (!event.target.value || !event.target.reportValidity()) return; selectedProductionDate = event.target.value; void renderProduction(); });
   root.querySelector("#syncScheduleBtn").addEventListener("click", async () => {
     const currentSchedule = await getScheduleForDate(selectedProductionDate);
@@ -4519,7 +4550,7 @@ async function renderProduction() {
     if (![...root.querySelectorAll('input[type="number"]')].every(input => input.reportValidity())) return;
     const previousRecord = settings.factoryRecord;
     const dayRecord = { date: selectedProductionDate, target: Number(root.querySelector("#productionTarget").value) || 0, machines: {}, updatedAt: new Date().toISOString() };
-    machines.forEach(machine => { const personId = root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="personId"]`).value; dayRecord.machines[machine] = { personId, personName: people.find(person => person.id === personId)?.name || record.machines?.[machine]?.personName || "", result: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="result"]`).value) || 0, waste: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="waste"]`).value) || 0, comment: root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="comment"]`).value.trim() }; });
+    machines.forEach(machine => { const personId = root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="personId"]`).value; dayRecord.machines[machine] = { personId, personName: people.find(person => person.id === personId)?.name || record.machines?.[machine]?.personName || "", cans: root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="cans"]`).value === "" ? null : Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="cans"]`).value), result: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="result"]`).value) || 0, waste: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="waste"]`).value) || 0, comment: root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="comment"]`).value.trim() }; });
     dayRecord.total = machines.reduce((sum, machine) => sum + dayRecord.machines[machine].result, 0);
     records[selectedProductionDate] = dayRecord;
     settings.dailyTarget = dayRecord.target;

@@ -236,6 +236,40 @@ let base;
   assert.equal(await evaluate(`return document.getElementById('productionTarget').value;`), '0');
   console.log('PASS production uses actual weekdays, validates numbers and supports quoted machine names');
 
+  assert.equal(await evaluate(`return document.querySelector('.production-cans').value;`), '');
+  await evaluate(`const boxes = document.querySelectorAll('.production-result')[1]; boxes.value = '0'; boxes.focus(); boxes.click();`);
+  await call('Input.insertText', { text: '7' });
+  assert.equal(await evaluate(`return document.querySelectorAll('.production-result')[1].value;`), '7');
+  await evaluate(`const cans = document.querySelector('.production-cans'); cans.value = '0'; cans.focus(); cans.click();`);
+  await call('Input.insertText', { text: '8' });
+  assert.equal(await evaluate(`return document.querySelector('.production-cans').value;`), '8');
+  console.log('PASS typing in BOX and dosor inputs replaces the existing zero');
+  await evaluate(`
+    const cans = document.querySelectorAll('.production-cans');
+    cans[0].value = '5376'; cans[0].dispatchEvent(new Event('input'));
+    cans[1].value = '5424'; cans[1].dispatchEvent(new Event('input'));
+  `);
+  assert.deepEqual(await evaluate(`return [...document.querySelectorAll('.production-result')].map(input => input.value);`), ['22', '23']);
+  assert.equal(await evaluate(`return document.getElementById('productionTotal').textContent;`), '45');
+  await evaluate(`document.getElementById('saveProductionBtn').click();`);
+  await waitFor(`document.querySelector('.production-cans').value === '5376' && document.querySelector('.production-result').value === '22'`);
+  assert.equal(await evaluate(`return (await getProductionRecords())[selectedProductionDate].machines.GD1.cans;`), 5376);
+  assert.equal(await evaluate(`return (await getProductionRecords())[selectedProductionDate].total;`), 45);
+  await screenshot('production-mobile.png');
+  await call('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  assert.ok(await evaluate(`return document.documentElement.scrollWidth <= innerWidth + 1;`), 'Production overflows desktop');
+  await screenshot('production-desktop.png');
+  await call('Emulation.setDeviceMetricsOverride', { width: 960, height: 900, deviceScaleFactor: 1, mobile: false });
+  assert.ok(await evaluate(`return document.documentElement.scrollWidth <= innerWidth + 1;`), 'Production overflows a narrow desktop');
+  await call('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await evaluate(`
+    const boxes = document.querySelector('.production-result');
+    boxes.value = '32'; boxes.dispatchEvent(new Event('input'));
+  `);
+  assert.equal(await evaluate(`return document.querySelector('.production-cans').value;`), '');
+  assert.equal(await evaluate(`return document.getElementById('productionTotal').textContent;`), '55');
+  console.log('PASS dosor convert to BOX per machine, update totals, persist counts and retain manual BOX entry');
+
   for (const name of fs.readdirSync(root).filter(name => name.endsWith('.html'))) {
     await navigate(name);
     assert.equal(await evaluate(`return document.querySelectorAll('.nav-link[aria-current="page"]').length;`), 1, `${name}: active navigation`);
