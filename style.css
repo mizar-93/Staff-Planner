@@ -4907,3 +4907,11 @@ button {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+/* Corporate account controls and read-only worker schedule. */
+.corporate-context { padding: 12px; color: #cbd5e1; }
+.corporate-context select { width: 100%; }
+.corporate-table { width: 100%; border-collapse: collapse; }
+.corporate-table th, .corporate-table td { padding: 12px; text-align: left; border-bottom: 1px solid #cbd5e1; }
+.card:has(.corporate-table) { overflow-x: auto; }
+main > .card form { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+main > .card form label { display: flex; flex-direction: column; gap: 5px; }

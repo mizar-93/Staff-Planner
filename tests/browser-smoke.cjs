@@ -270,6 +270,48 @@ let base;
   assert.equal(await evaluate(`return document.getElementById('productionTotal').textContent;`), '55');
   console.log('PASS dosor convert to BOX per machine, update totals, persist counts and retain manual BOX entry');
 
+  await waitFor(`document.getElementById('productionSaveStatus').textContent === 'Sparat automatiskt'`);
+  assert.equal(await evaluate(`return (await getProductionRecords())[selectedProductionDate].machines[appSettings.productionMachines[0]].result;`),32);
+  await evaluate(`
+    const comment=document.querySelector('[data-field="comment"]');comment.focus();comment.value='Automatic save';comment.dispatchEvent(new Event('input'));
+    const waste=document.querySelector('.production-waste');waste.value='1.25';waste.dispatchEvent(new Event('input'));
+  `);
+  await waitFor(`document.getElementById('productionSaveStatus').textContent === 'Sparat automatiskt'`);
+  assert.deepEqual(await evaluate(`const m=(await getProductionRecords())[selectedProductionDate].machines[appSettings.productionMachines[0]];return [m.comment,m.waste,document.activeElement.dataset.field];`),['Automatic save',1.25,'comment']);
+  console.log('PASS automatic production save preserves focus and saves comments and waste without a button');
+
+  await evaluate(`const input=document.querySelector('.production-result');input.value='-1';input.dispatchEvent(new Event('input'));`);
+  await waitFor(`document.getElementById('productionSaveStatus').textContent.includes('giltiga')`);
+  assert.equal(await evaluate(`return (await getProductionRecords())[selectedProductionDate].machines[appSettings.productionMachines[0]].result;`),32);
+  await evaluate(`
+    window.originalProductionSave=saveProductionRecords;
+    saveProductionRecords=async()=>{throw Error('Expected save failure');};
+    const input=document.querySelector('.production-result');input.value='33';input.dispatchEvent(new Event('input'));
+  `);
+  await waitFor(`document.getElementById('productionSaveStatus').textContent.includes('Kunde inte spara')`);
+  assert.equal(await evaluate(`return document.querySelector('.production-result').value;`),'33');
+  await evaluate(`saveProductionRecords=window.originalProductionSave;document.getElementById('saveProductionBtn').click();`);
+  await waitFor(`document.getElementById('productionSaveStatus').textContent === 'Sparat automatiskt'`);
+  console.log('PASS invalid production values are not saved; failed saves retain input and retry');
+
+  await evaluate(`
+    saveProductionRecords=async records=>{await new Promise(resolve=>setTimeout(resolve,300));await window.originalProductionSave(records);};
+    const input=document.querySelector('.production-result');input.value='34';input.dispatchEvent(new Event('input'));
+  `);
+  await waitFor(`document.getElementById('productionSaveStatus').textContent === 'Sparar…'`);
+  await evaluate(`const input=document.querySelector('.production-result');input.value='35';input.dispatchEvent(new Event('input'));`);
+  await waitFor(`document.getElementById('productionSaveStatus').textContent === 'Sparat automatiskt'`);
+  assert.equal(await evaluate(`return (await getProductionRecords())[selectedProductionDate].machines[appSettings.productionMachines[0]].result;`),35);
+  await evaluate(`
+    saveProductionRecords=window.originalProductionSave;
+    window.previousProductionDate=selectedProductionDate;
+    const input=document.querySelector('.production-result');input.value='36';input.dispatchEvent(new Event('input'));
+    const date=document.getElementById('productionDate');date.value='2026-11-02';date.dispatchEvent(new Event('change'));
+  `);
+  await waitFor(`selectedProductionDate === '2026-11-02' && document.getElementById('productionDate').value === '2026-11-02' && document.querySelector('.production-result').value !== '36'`);
+  assert.equal(await evaluate(`return (await getProductionRecords())[window.previousProductionDate].machines[appSettings.productionMachines[0]].result;`),36);
+  console.log('PASS edits during saves persist the latest value; switching dates flushes the previous day');
+
   for (const name of fs.readdirSync(root).filter(name => name.endsWith('.html'))) {
     await navigate(name);
     assert.equal(await evaluate(`return document.querySelectorAll('.nav-link[aria-current="page"]').length;`), 1, `${name}: active navigation`);

@@ -158,6 +158,7 @@ let selectedBreakDay = getDefaultBreakDay();
 let selectedAssessmentPersonId = "";
 let selectedTestPersonId = "";
 let selectedProductionDate = formatDateKey(new Date());
+let productionEditor = null;
 let selectedCompetencyPersonId = "";
 let assessmentFormOpen = false;
 let editingAssessmentId = "";
@@ -4470,6 +4471,9 @@ function convertProductionCansToBoxes(value) {
 async function renderProduction() {
   const root = document.getElementById("productionPage");
   if (!root) return;
+  if (productionEditor && !await productionEditor.flush()) return;
+  productionEditor?.dispose();
+  const productionDate = selectedProductionDate;
   const [people, records, settings, schedule] = await Promise.all([
     getPeople(), getProductionRecords(), getProductionSettings(), getScheduleForDate(selectedProductionDate)
   ]);
@@ -4493,7 +4497,7 @@ async function renderProduction() {
   const target = Number(record.target ?? settings.dailyTarget);
   const personOptions = (selectedId, savedName = "") => `<option value="">Välj person</option>${selectedId && !people.some(person => person.id === selectedId) ? `<option value="${selectedId}" selected>${escapeHtml(savedName || "Tidigare personal")}</option>` : ""}${people.map(person => `<option value="${person.id}"${person.id === selectedId ? " selected" : ""}>${escapeHtml(person.name)}</option>`).join("")}`;
   root.innerHTML = `
-    <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn primary" type="button">Spara dagen</button></div>
+    <div class="production-toolbar card"><label>Datum<input id="productionDate" type="date" value="${selectedProductionDate}" /></label><div class="production-settings"><label>Dagligt mål<input id="productionTarget" type="number" min="0" value="${target}" /></label></div><button id="syncScheduleBtn" class="btn" type="button">Hämta från Schema</button><button id="saveProductionBtn" class="btn" type="button">Spara nu</button><span id="productionSaveStatus" role="status" aria-live="polite">Sparas automatiskt</span></div>
     <div class="production-kpis"><article id="productionTotalCard" class="${total >= target ? "goal-card-met" : "goal-card-missed"}"><span>Dagens produktion</span><strong id="productionTotal">${total}</strong><small>box totalt</small></article><article><span>Dagligt mål</span><strong id="productionGoalValue">${target}</strong><small>box</small></article><article class="factory-record-card"><span>Fabriksrekord</span><strong id="factoryRecordValue">${settings.factoryRecord}</strong><small>officiellt rekord · uppdateras vid nytt rekord</small><button id="editFactoryRecordBtn" type="button">Ändra manuellt</button></article></div>
     <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><p class="production-conversion-note">${PRODUCTION_CANS_PER_BOX} dosor = 1 box. Ange antal dosor för automatisk omräkning, eller skriv BOX direkt. BOX avrundas uppåt från 0,6 och nedåt under 0,6.</p><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${escapeHtml(machine.replace("GD", "GD-"))}</strong><label>Operatör<select data-machine="${escapeHtml(machine)}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Antal dosor<input data-machine="${escapeHtml(machine)}" data-field="cans" class="production-cans" type="number" min="0" max="9007199254740991" step="1" inputmode="numeric" value="${escapeHtml(item.cans ?? "")}" placeholder="0" /></label><label>Resultat (BOX)<input data-machine="${escapeHtml(machine)}" data-field="result" class="production-result" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(item.result ?? "")}" placeholder="0" /></label><label>Svinn (KG)<input data-machine="${escapeHtml(machine)}" data-field="waste" class="production-waste" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(item.waste ?? "")}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${escapeHtml(machine)}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
     <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Klicka på en dag för att visa eller ta bort resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<div class="production-history-item"><button type="button" data-production-menu="${item.date}" class="production-history-trigger ${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button><div class="production-history-menu" data-production-actions="${item.date}" hidden><button type="button" data-production-view="${item.date}">Visa</button><button type="button" class="danger" data-production-delete="${item.date}">Ta bort</button></div></div>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
@@ -4528,12 +4532,20 @@ async function renderProduction() {
     updateSummary();
   }));
   root.querySelector("#productionTarget").addEventListener("input", updateSummary);
-  root.querySelector("#productionDate").addEventListener("change", event => { if (!event.target.value || !event.target.reportValidity()) return; selectedProductionDate = event.target.value; void renderProduction(); });
+  root.querySelector("#productionDate").addEventListener("change", async event => {
+    if (!event.target.value || !event.target.reportValidity()) return;
+    const nextDate = event.target.value;
+    if (!await productionEditor.flush()) { event.target.value = productionDate; return; }
+    selectedProductionDate = nextDate;
+    await renderProduction();
+  });
   root.querySelector("#syncScheduleBtn").addEventListener("click", async () => {
     const currentSchedule = await getScheduleForDate(selectedProductionDate);
     machines.forEach(machine => { const select = root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="personId"]`); select.value = scheduleDay ? currentSchedule[machine]?.[scheduleDay] || "" : ""; });
+    queueProductionSave();
   });
   root.querySelector("#editFactoryRecordBtn").addEventListener("click", async () => {
+    if (!await productionEditor.flush()) return;
     const enteredValue = prompt("Ange fabriksrekord (box):", String(settings.factoryRecord));
     if (enteredValue === null) return;
     const newRecord = Number(enteredValue);
@@ -4546,23 +4558,89 @@ async function renderProduction() {
     await addAuditEvent("production", "Fabriksrekord ändrat", `${settings.factoryRecord} box`);
     await renderProduction();
   });
-  bindOnce(root.querySelector("#saveProductionBtn"), "click", async () => {
-    if (![...root.querySelectorAll('input[type="number"]')].every(input => input.reportValidity())) return;
+  let dirty = false, revision = 0, timer = null, saving = null, disposed = false;
+  const saveStatus = root.querySelector("#productionSaveStatus");
+  function queueProductionSave() {
+    if (disposed) return;
+    dirty = true; revision++;
+    saveStatus.textContent = "Väntar på att spara…";
+    clearTimeout(timer);
+    timer = setTimeout(() => { void flushProductionSave(); }, 600);
+  }
+  async function flushProductionSave() {
+    clearTimeout(timer);
+    if (saving) { const success = await saving; return success ? flushProductionSave() : false; }
+    if (!dirty) return true;
+    if (![...root.querySelectorAll('input[type="number"]')].every(input => input.validity.valid)) {
+      saveStatus.textContent = "Ange giltiga tal för att spara.";
+      return false;
+    }
+    const savedRevision = revision;
     const previousRecord = settings.factoryRecord;
-    const dayRecord = { date: selectedProductionDate, target: Number(root.querySelector("#productionTarget").value) || 0, machines: {}, updatedAt: new Date().toISOString() };
+    const dayRecord = { date: productionDate, target: Number(root.querySelector("#productionTarget").value) || 0, machines: {}, updatedAt: new Date().toISOString() };
     machines.forEach(machine => { const personId = root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="personId"]`).value; dayRecord.machines[machine] = { personId, personName: people.find(person => person.id === personId)?.name || record.machines?.[machine]?.personName || "", cans: root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="cans"]`).value === "" ? null : Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="cans"]`).value), result: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="result"]`).value) || 0, waste: Number(root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="waste"]`).value) || 0, comment: root.querySelector(`[data-machine="${CSS.escape(machine)}"][data-field="comment"]`).value.trim() }; });
     dayRecord.total = machines.reduce((sum, machine) => sum + dayRecord.machines[machine].result, 0);
-    records[selectedProductionDate] = dayRecord;
-    settings.dailyTarget = dayRecord.target;
+    const nextRecords = { ...records, [productionDate]: dayRecord };
+    const nextSettings = { ...settings, dailyTarget: dayRecord.target };
     const brokeRecord = dayRecord.total > settings.factoryRecord;
-    if (brokeRecord) settings.factoryRecord = dayRecord.total;
-    await Promise.all([saveProductionRecords(records), saveProductionSettings(settings)]);
-    await addAuditEvent("production", `Produktion ${selectedProductionDate}`, `${dayRecord.total} box`);
-    if (brokeRecord) showProductionCelebration(dayRecord.total, previousRecord);
-    await renderProduction();
-    await renderDashboard();
+    if (brokeRecord) nextSettings.factoryRecord = dayRecord.total;
+    saveStatus.textContent = "Sparar…";
+    saving = (async () => {
+      try {
+        await saveProductionRecords(nextRecords);
+        await saveProductionSettings(nextSettings);
+        Object.assign(records, nextRecords); Object.assign(settings, nextSettings);
+        dirty = revision !== savedRevision;
+        saveStatus.textContent = dirty ? "Väntar på att spara…" : "Sparat automatiskt";
+        root.querySelector("#factoryRecordValue").textContent = settings.factoryRecord;
+        const history = root.querySelector(".production-history-list");
+        let entry = history.querySelector(`[data-production-menu="${productionDate}"]`);
+        if (!entry) {
+          history.querySelector(".empty-state")?.remove();
+          const row = document.createElement("div"); row.className = "production-history-item";
+          row.innerHTML = `<button type="button" data-production-menu="${productionDate}" class="production-history-trigger active"><span>${new Date(productionDate + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong></strong><small></small></button><div class="production-history-menu" data-production-actions="${productionDate}" hidden><button type="button" data-production-view="${productionDate}">Visa</button><button type="button" class="danger" data-production-delete="${productionDate}">Ta bort</button></div>`;
+          history.prepend(row); entry = row.querySelector(".production-history-trigger");
+          bindProductionHistory(row);
+        }
+        entry.querySelector("strong").textContent = `${dayRecord.total} box`;
+        entry.querySelector("small").textContent = dayRecord.total >= dayRecord.target ? "Mål uppnått" : "Under mål";
+        entry.querySelector("small").className = dayRecord.total >= dayRecord.target ? "history-met" : "history-missed";
+        root.querySelector(".production-history-heading > span").textContent = `${Object.keys(records).length} dagar`;
+        try { await addAuditEvent("production", `Produktion ${productionDate}`, `${dayRecord.total} box`); }
+        catch (error) { console.error("Production audit could not be saved", error); }
+        if (brokeRecord) showProductionCelebration(dayRecord.total, previousRecord);
+        await renderDashboard();
+        return true;
+      } catch (error) {
+        saveStatus.textContent = "Kunde inte spara. Klicka på Spara nu för att försöka igen.";
+        console.error("Production save failed", error);
+        return false;
+      }
+    })();
+    const success = await saving; saving = null;
+    if (success && dirty) return flushProductionSave();
+    return success;
+  }
+  const beforeLeave = event => { if (dirty || saving) { event.preventDefault(); event.returnValue = ""; } };
+  const navigate = async event => {
+    const link = event.target.closest('a[href]');
+    if (!link || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || link.target === "_blank" || !(dirty || saving)) return;
+    event.preventDefault();
+    if (await flushProductionSave()) location.assign(link.href);
+  };
+  window.addEventListener("beforeunload", beforeLeave);
+  document.addEventListener("click", navigate, true);
+  productionEditor = { flush: flushProductionSave, dispose() { disposed = true; clearTimeout(timer); window.removeEventListener("beforeunload", beforeLeave); document.removeEventListener("click", navigate, true); } };
+  root.querySelectorAll('[data-field], #productionTarget').forEach(input => {
+    input.addEventListener("input", queueProductionSave);
+    input.addEventListener("change", queueProductionSave);
   });
-  root.querySelectorAll("[data-production-menu]").forEach(button => button.addEventListener("click", event => {
+  bindOnce(root.querySelector("#saveProductionBtn"), "click", async () => {
+    queueProductionSave();
+    await flushProductionSave();
+  });
+  function bindProductionHistory(container) {
+  container.querySelectorAll("[data-production-menu]").forEach(button => button.addEventListener("click", event => {
     event.stopPropagation();
     const menu = root.querySelector(`[data-production-actions="${button.dataset.productionMenu}"]`);
     root.querySelectorAll(".production-history-menu").forEach(item => {
@@ -4570,20 +4648,24 @@ async function renderProduction() {
     });
     if (menu) menu.hidden = !menu.hidden;
   }));
-  root.querySelectorAll("[data-production-view]").forEach(button => button.addEventListener("click", () => {
+  container.querySelectorAll("[data-production-view]").forEach(button => button.addEventListener("click", async () => {
+    if (!await flushProductionSave()) return;
     selectedProductionDate = button.dataset.productionView;
     void renderProduction();
   }));
-  root.querySelectorAll("[data-production-delete]").forEach(button => button.addEventListener("click", async () => {
+  container.querySelectorAll("[data-production-delete]").forEach(button => button.addEventListener("click", async () => {
     const date = button.dataset.productionDelete;
     const displayDate = new Date(date + "T12:00:00").toLocaleDateString("sv-SE");
     if (!confirm(`Vill du ta bort produktionsresultatet för ${displayDate}?`)) return;
+    if (!await flushProductionSave()) return;
     delete records[date];
     await saveProductionRecords(records);
     await addAuditEvent("production", `Produktion ${date} borttagen`, "Resultatet raderades från historiken");
     await renderProduction();
     await renderDashboard();
   }));
+  }
+  bindProductionHistory(root);
   bindOnce(root, "click", event => {
     if (!event.target.closest(".production-history-item")) {
       root.querySelectorAll(".production-history-menu").forEach(menu => { menu.hidden = true; });
@@ -5303,6 +5385,8 @@ async function openAppUI() {
   finishInitialViewSetup();
 
   bindOnce(logoutBtn, "click", async () => {
+    if (productionEditor && !await productionEditor.flush()) return;
+    productionEditor?.dispose(); productionEditor = null;
     lockApp();
     await setupAuthUI();
   });
