@@ -53,6 +53,10 @@ The worker's base role remains unchanged. The deputy gets a restricted editor fo
 
 ## Validation
 
+Production retention follows **Europe/Stockholm** calendar dates. Previous-month production is retained through the 9th of the new month; starting on the 10th only current-month and later entries remain. Earlier months are also removed after missed runs. For example, October results are deleted on November 10. This applies to production records only; staff, schedule, assessments, private tasks, production targets, and the factory record are preserved.
+
+Corporate cleanup runs at startup, once per minute while the server is running, and before production reads. Writes filter expired records to prevent restoring them from an old page or backup. In local mode, encrypted records are cleaned when production/dashboard data is read after unlocking, and on the monthly boundary while the app remains open. A closed local browser cannot perform background deletion. External exported backup files and company-managed database backups are not modified by application cleanup. The date picker prevents entering expired production dates.
+
 `npm test` checks existing app regressions plus authorization and worker projection. `node tests/corporate-browser.cjs` checks corporate role screens using a mock API; `node tests/browser-smoke.cjs` checks local mode in Edge. After connecting real infrastructure, verify login/logout for all roles, account disable/reassignment, cross-shift API requests (403), worker general-data requests (403), manager task PUT (403), concurrent edits (409), and full schedule/production saving. Real Microsoft login and SQL integration require the company's connection settings and have not been exercised locally.
 
 The login handshake currently uses temporary in-process state. Deploy one server instance. If using multiple instances, replace `pending` with shared expiring storage before enabling load balancing. The SQL schema is provided explicitly and is not automatically applied at startup.

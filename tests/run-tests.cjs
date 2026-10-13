@@ -158,6 +158,17 @@ async function test(name, action) {
     assert.equal(run('JSON.stringify(appSettings)'), before);
     run('dataStore.set = originalDataStoreSet;');
   });
+  await test('Expired production records are removed from encrypted storage without changing production settings', async () => {
+    await run('setupPassword("retention-test-password")');
+    await run('saveProductionSettings({dailyTarget:160,factoryRecord:999})');
+    await run('encryptStoredItem(STORAGE_KEYS.productionRecords,{"2000-01-01":{date:"2000-01-01",total:10},[getProductionRetentionStart()]:{date:getProductionRetentionStart(),total:20}})');
+    const retained=plain(await run('getProductionRecords()'));
+    assert.equal(retained['2000-01-01'],undefined);
+    assert.deepEqual(plain(await run('decryptStoredItem(STORAGE_KEYS.productionRecords,{})')),retained);
+    assert.deepEqual(plain(await run('getProductionSettings()')),{dailyTarget:160,factoryRecord:999});
+    await run('saveProductionRecords({"2000-01-01":{total:10},[getProductionRetentionStart()]:{total:20}})');
+    assert.equal((plain(await run('decryptStoredItem(STORAGE_KEYS.productionRecords,{})')))['2000-01-01'],undefined);
+  });
   await test('Clearing application data removes weekly timestamps and keeps unrelated data', () => {
     run('localStorage.setItem("staff_schedule_updated_at:2026-10-12", "now"); localStorage.setItem("other_app", "keep"); clearPersistentData();');
     assert.equal(run('localStorage.getItem("staff_schedule_updated_at:2026-10-12")'), null);

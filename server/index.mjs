@@ -2,7 +2,7 @@ import express from 'express';
 import {randomBytes,createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {createRemoteJWKSet,jwtVerify} from 'jose';
-import {pool,data,save} from './store.mjs';
+import {pool,data,save,cleanupProductionRecords} from './store.mjs';
 import {allowed,roles,shifts,workerSchedule,isDeputy,canDelegate,validDeputySchedule} from './access.mjs';
 const app = express();
 const origin = process.env.PUBLIC_ORIGIN;
@@ -168,3 +168,11 @@ app.get('/',(_req,res)=>res.redirect('/dashboard.html'));
 app.get('/service-worker.js',(_req,res)=>res.type('js').send("self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('staff-planner-')).map(k=>caches.delete(k)))),self.registration.unregister()]).then(()=>self.clients.claim())));"));
 app.use((error,_req,res,_next)=>{console.error('Request failed',error.code || error.name);res.status(error.code==='23505'?409:500).json({error:error.code==='23505'?'E-post, Microsoft-ID eller skiftledare finns redan.':'Åtgärden misslyckades.'});});
 app.listen(Number(process.env.PORT)||3000,()=>console.log('Staff Planner corporate server ready'));
+// Run even when no client is connected; startup and reads also catch up after downtime.
+let cleaning=false;
+async function scheduledProductionCleanup() {
+  if(cleaning)return;cleaning=true;
+  try {await cleanupProductionRecords();} catch(error) {console.error('Production retention cleanup failed',error.code || error.name);} finally {cleaning=false;}
+}
+void scheduledProductionCleanup();
+setInterval(()=>void scheduledProductionCleanup(),60000).unref();

@@ -1747,14 +1747,29 @@ async function saveMachineSkillDetails(details) {
   await encryptStoredItem(STORAGE_KEYS.machineSkillDetails, details);
 }
 
+function getProductionRetentionStart(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Stockholm", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now).map(part => [part.type, part.value]));
+  let year = Number(parts.year), month = Number(parts.month);
+  if (Number(parts.day) < 10) { month--; if (month === 0) { year--; month = 12; } }
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+function retainProductionRecords(records, now = new Date()) {
+  const cutoff = getProductionRetentionStart(now);
+  return Object.fromEntries(Object.entries(records).filter(([date]) => !/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= cutoff));
+}
+
 async function getProductionRecords() {
   if (!appUnlocked || !sessionKey) return {};
   const records = await decryptStoredItem(STORAGE_KEYS.productionRecords, {});
-  return records && typeof records === "object" && !Array.isArray(records) ? records : {};
+  if (!records || typeof records !== "object" || Array.isArray(records)) return {};
+  const retained = retainProductionRecords(records);
+  if (Object.keys(retained).length !== Object.keys(records).length) await encryptStoredItem(STORAGE_KEYS.productionRecords, retained);
+  return retained;
 }
 
 async function saveProductionRecords(records) {
-  await encryptStoredItem(STORAGE_KEYS.productionRecords, records);
+  await encryptStoredItem(STORAGE_KEYS.productionRecords, retainProductionRecords(records));
 }
 
 async function getProductionSettings() {
@@ -4473,6 +4488,8 @@ async function renderProduction() {
   if (!root) return;
   if (productionEditor && !await productionEditor.flush()) return;
   productionEditor?.dispose();
+  const cutoff = getProductionRetentionStart();
+  if (selectedProductionDate < cutoff) selectedProductionDate = cutoff;
   const productionDate = selectedProductionDate;
   const [people, records, settings, schedule] = await Promise.all([
     getPeople(), getProductionRecords(), getProductionSettings(), getScheduleForDate(selectedProductionDate)
@@ -4502,6 +4519,11 @@ async function renderProduction() {
     <section class="production-entry card"><div class="production-heading"><div><small>DAGLIG PRODUKTION</small><h3>${new Date(selectedProductionDate + "T12:00:00").toLocaleDateString("sv-SE", { weekday:"long", year:"numeric", month:"long", day:"numeric" })}</h3></div><span id="productionStatus" class="production-status ${total >= target ? "goal-met" : "goal-missed"}">${total >= target ? "Målet uppnått" : "Under målet"}</span></div><p class="production-conversion-note">${PRODUCTION_CANS_PER_BOX} dosor = 1 box. Ange antal dosor för automatisk omräkning, eller skriv BOX direkt. BOX avrundas uppåt från 0,6 och nedåt under 0,6.</p><div class="production-machine-list">${machines.map(machine => { const item = record.machines?.[machine] || {}; return `<article class="production-machine-row"><strong>${escapeHtml(machine.replace("GD", "GD-"))}</strong><label>Operatör<select data-machine="${escapeHtml(machine)}" data-field="personId">${personOptions(item.personId, item.personName)}</select></label><label>Antal dosor<input data-machine="${escapeHtml(machine)}" data-field="cans" class="production-cans" type="number" min="0" max="9007199254740991" step="1" inputmode="numeric" value="${escapeHtml(item.cans ?? "")}" placeholder="0" /></label><label>Resultat (BOX)<input data-machine="${escapeHtml(machine)}" data-field="result" class="production-result" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(item.result ?? "")}" placeholder="0" /></label><label>Svinn (KG)<input data-machine="${escapeHtml(machine)}" data-field="waste" class="production-waste" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(item.waste ?? "")}" placeholder="0" /></label><label class="production-comment">Kommentar<input data-machine="${escapeHtml(machine)}" data-field="comment" value="${escapeHtml(item.comment || "")}" placeholder="Kommentar, stopp eller material" /></label></article>`; }).join("")}</div></section>
     <section class="production-history card"><div class="production-history-heading"><div><h3>Historik</h3><p>Klicka på en dag för att visa eller ta bort resultatet.</p></div><span>${Object.keys(records).length} dagar</span></div><div class="production-history-list">${Object.values(records).sort((a,b) => b.date.localeCompare(a.date)).map(item => `<div class="production-history-item"><button type="button" data-production-menu="${item.date}" class="production-history-trigger ${item.date === selectedProductionDate ? "active" : ""}"><span>${new Date(item.date + "T12:00:00").toLocaleDateString("sv-SE")}</span><strong>${item.total || 0} box</strong><small class="${Number(item.total) >= Number(item.target) ? "history-met" : "history-missed"}">${Number(item.total) >= Number(item.target) ? "Mål uppnått" : "Under mål"}</small></button><div class="production-history-menu" data-production-actions="${item.date}" hidden><button type="button" data-production-view="${item.date}">Visa</button><button type="button" class="danger" data-production-delete="${item.date}">Ta bort</button></div></div>`).join("") || '<div class="empty-state">Ingen produktion sparad ännu.</div>'}</div></section>
   `;
+  root.querySelector("#productionDate").min = cutoff;
+  const retentionNote = document.createElement("p");
+  retentionNote.className = "production-conversion-note";
+  retentionNote.textContent = "Resultat från föregående månad sparas till och med den 9:e. Den 10:e raderas tidigare månaders resultat automatiskt (svensk tid).";
+  root.querySelector(".production-history-heading").after(retentionNote);
   const updateSummary = () => {
     const currentTotal = [...root.querySelectorAll(".production-result")].reduce((sum, input) => sum + (Number(input.value) || 0), 0);
     const currentTarget = Number(root.querySelector("#productionTarget").value) || 0;
@@ -4571,6 +4593,10 @@ async function renderProduction() {
     clearTimeout(timer);
     if (saving) { const success = await saving; return success ? flushProductionSave() : false; }
     if (!dirty) return true;
+    if (productionDate < getProductionRetentionStart()) {
+      saveStatus.textContent = "Denna månads resultat har löpt ut. Ladda om sidan för att välja en aktuell dag.";
+      return false;
+    }
     if (![...root.querySelectorAll('input[type="number"]')].every(input => input.validity.valid)) {
       saveStatus.textContent = "Ange giltiga tal för att spara.";
       return false;
@@ -5517,3 +5543,24 @@ window.addEventListener("pageshow", event => {
   renderWeekNavigation();
   void renderBreakPlanner();
 });
+
+// Local encrypted data can only be cleaned while the app is unlocked.
+// Corporate retention runs independently on the server.
+if (typeof window.setInterval === "function") {
+  let retentionStart = getProductionRetentionStart(), cleaningProduction = false;
+  const checkProductionRetention = async () => {
+    if (!appUnlocked || window.STAFF_CORPORATE || cleaningProduction) return;
+    const nextStart = getProductionRetentionStart();
+    if (nextStart === retentionStart) return;
+    cleaningProduction = true;
+    try {
+      await getProductionRecords();
+      retentionStart = nextStart;
+      if (document.getElementById("productionPage")) await renderProduction();
+      await renderDashboard();
+    } catch (error) { console.error("Production retention cleanup failed", error); }
+    finally { cleaningProduction = false; }
+  };
+  window.setInterval(() => { void checkProductionRetention(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) void checkProductionRetention(); });
+}

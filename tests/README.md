@@ -4,6 +4,7 @@ Run the regression checks with Node.js 22 or later:
 node tests/run-tests.cjs
 node tests/browser-smoke.cjs
 node tests/access.test.mjs
+node tests/retention.test.mjs
 node tests/corporate-browser.cjs
 ```
 

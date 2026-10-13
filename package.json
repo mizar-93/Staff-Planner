@@ -1,6 +1,6 @@
 {
   "name": "staff-planner", "private": true, "type": "module",
-  "scripts": {"start": "node --env-file=.env server/index.mjs", "test": "node tests/access.test.mjs && node tests/run-tests.cjs"},
+  "scripts": {"start": "node --env-file=.env server/index.mjs", "test": "node tests/access.test.mjs && node tests/retention.test.mjs && node tests/run-tests.cjs"},
   "engines": {"node": ">=22"},
   "dependencies": {"express": "^5.1.0", "jose": "^6.0.0", "pg": "^8.16.0"}
 }
